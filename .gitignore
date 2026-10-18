@@ -1,0 +1,13 @@
+# Local only, never committed: design notes, research evidence, local outputs and test runs
+/ideate/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Claude Code per-user settings
+.claude/settings.local.json

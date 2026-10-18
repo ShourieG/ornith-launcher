@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ornith-launcher"
+description = "Unofficial launcher for running Ornith models locally with llama.cpp"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Shourie Ganguly" }]
+dependencies = []
+dynamic = ["version"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Repository = "https://github.com/ShourieG/ornith-launcher"
+
+[project.scripts]
+ornith-launcher = "ornith_launcher.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "ornith_launcher.__version__" }
+
+[tool.setuptools.package-data]
+ornith_launcher = ["data/*.json"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

@@ -1,0 +1,4 @@
+# LF everywhere, so the sh entry script still runs after a checkout on Windows.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

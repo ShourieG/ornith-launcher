@@ -1,0 +1,52 @@
+#!/bin/sh
+# ornith-launcher (unofficial): finds Python 3.9+ and runs the package from this
+# checkout's src/ folder. POSIX sh only, because macOS ships bash 3.2.
+set -eu
+
+# Prints the folder part of a path, or "." when the path has no slash.
+dir_of() {
+    case $1 in
+        */*) printf '%s\n' "${1%/*}" ;;
+        *) printf '.\n' ;;
+    esac
+}
+
+# Follow symlinks (e.g. one placed in ~/.local/bin) to find the real checkout.
+self=$0
+while [ -L "$self" ]; do
+    target=$(readlink "$self")
+    case $target in
+        /*) self=$target ;;
+        *) self=$(dir_of "$self")/$target ;;
+    esac
+done
+here=$(cd "$(dir_of "$self")" && pwd -P)
+
+python=
+for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 &&
+        "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+        python=$candidate
+        break
+    fi
+done
+
+if [ -z "$python" ]; then
+    echo "ornith-launcher needs Python 3.9 or newer, and none was found." >&2
+    case $(uname -s 2>/dev/null || true) in
+        Darwin)
+            echo "Install it with: xcode-select --install" >&2
+            echo "            or: brew install python" >&2
+            ;;
+        *)
+            echo "Install it with your package manager, for example:" >&2
+            echo "  Debian/Ubuntu: sudo apt install python3" >&2
+            echo "  Fedora:        sudo dnf install python3" >&2
+            ;;
+    esac
+    exit 1
+fi
+
+PYTHONPATH="$here/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec "$python" -m ornith_launcher "$@"

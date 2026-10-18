@@ -1,0 +1,20 @@
+ornith-launcher
+Copyright 2026 Shourie Ganguly
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+ornith-launcher is an unofficial project and is not affiliated with, endorsed by,
+or sponsored by Ornith AI, Anthropic, Anomaly/OpenCode, Hugging Face, Docker,
+NVIDIA, AMD, Intel or ggml.org.
+
+Ornith, Claude, Claude Code, OpenCode and other names are trademarks of their
+respective owners and are used only to describe compatibility.
+
+Third-party software used at runtime is not distributed with this project:
+
+  llama.cpp (MIT License, ggml.org). On Linux it runs from the official Docker
+  images; on Windows and macOS from the official release binaries. Both are
+  downloaded by the user from their publishers.
+
+Model weights are not distributed with this project. Users download them from
+Hugging Face, and each model is under its own licence.
