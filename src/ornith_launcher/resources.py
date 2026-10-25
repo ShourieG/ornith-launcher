@@ -11,6 +11,15 @@ from ornith_launcher.errors import DataFileError
 _REINSTALL_HINT = "Re-download ornith-launcher; the package files look incomplete."
 
 
+def load_text(name: str) -> str:
+    """Return the contents of ``data/<name>``."""
+    path = resources.files("ornith_launcher") / "data" / name
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise DataFileError(f"data file {name} is missing", hint=_REINSTALL_HINT) from exc
+
+
 def load_json(name: str) -> Any:
     """Return the parsed contents of ``data/<name>``."""
     path = resources.files("ornith_launcher") / "data" / name

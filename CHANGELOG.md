@@ -18,3 +18,18 @@ All notable changes to this project are recorded here. The format follows
   Hugging Face without a login.
 - A shipped list of Ornith GGUF builds on Hugging Face (metadata only), so `scan` works offline.
 - Ornith 1.0 and 1.5 at 9B, 35B and 397B, and 1.5 at 122B, recognised from their GGUF headers.
+- `setup` command, up to a downloaded or found model: system check, a quick search for Ornith models already on
+  the machine (Hugging Face cache, LM Studio, Ollama, llama.cpp cache, `~/models`, `~/Downloads`), the model
+  list, options, an editable models folder, and a resumable, sha256-verified download. Models found on the
+  machine are used where they are and never moved. Full-screen lists where the terminal allows, numbered menus
+  with `--plain`.
+- Launching: `setup` now finishes with the llama.cpp image, llama.cpp's own memory check, a terminal for the
+  server monitor, an optional desktop shortcut and a saved profile. `launch`, `stop`, `status`, `list`,
+  `monitor`, `remove` and `uninstall` commands; `ornith-launcher` alone runs setup the first time and launches the
+  default profile after that. The server listens on 127.0.0.1 only, and Ctrl+C stops it (default yes).
+- `setup --repair NAME` puts back a missing image or download.
+- Claude Code and OpenCode: setup can connect a profile to either or both, installing them with their official
+  installers when asked. Claude Code runs through `ornith-claude-<profile>` (and `ornith-claude` for the default
+  profile) without touching your own Claude Code settings, with a chat-template fix applied to a copy so system
+  messages in mid-conversation work. OpenCode gets a provider entry; the config file is backed up first, and a
+  file with comments is never rewritten without asking. `setup --integrations NAME` changes this later.

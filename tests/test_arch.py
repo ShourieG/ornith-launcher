@@ -54,6 +54,13 @@ class ModelArchTest(unittest.TestCase):
         per_layer = (key, ValueType.ARRAY, (ValueType.UINT32, [0, 4, 0, 4]))
         pairs = [per_layer if pair[0] == key else pair for pair in ornith_pairs("9B")]
         self.assertEqual(arch_for(pairs).head_count_kv, 4)
+        # The same header read back from the JSON catalog cache holds a list.
+        values = dict(gguf.parse_metadata(gguf_bytes(pairs)).values)
+        values[key] = [0, 4, 0, 4]
+        self.assertEqual(ModelArch.from_metadata(values).head_count_kv, 4)
+        values[key] = "four"
+        with self.assertRaisesRegex(GGUFError, "unexpected value"):
+            ModelArch.from_metadata(values)
 
 
 if __name__ == "__main__":

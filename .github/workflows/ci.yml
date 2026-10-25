@@ -46,3 +46,14 @@ jobs:
       # shellcheck is preinstalled on GitHub's Ubuntu runners.
       - name: shellcheck
         run: shellcheck ornith-launcher
+      - name: shellcheck a generated Claude Code wrapper
+        run: |
+          python - <<'PY'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path[:0] = ["src", "."]
+          from ornith_launcher.integrations.claude_code import wrapper_script
+          from tests.runtime_fixtures import profile
+          Path("wrapper.sh").write_text(wrapper_script(profile(Path(tempfile.mkdtemp()))))
+          PY
+          shellcheck wrapper.sh

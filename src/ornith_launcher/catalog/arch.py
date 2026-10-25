@@ -82,6 +82,10 @@ class ModelArch:
 
 def _as_int(value: Any) -> int:
     # Some architectures store per-layer values as an array; the largest one bounds memory use.
-    if isinstance(value, tuple):
-        return max(int(item) for item in value) if value else 0
-    return int(value)
+    # Parsed headers hold tuples; headers read back from the JSON cache hold lists.
+    try:
+        if isinstance(value, (tuple, list)):
+            return max(int(item) for item in value) if value else 0
+        return int(value)
+    except (TypeError, ValueError):
+        raise GGUFError(f"unexpected value {value!r} in the header") from None

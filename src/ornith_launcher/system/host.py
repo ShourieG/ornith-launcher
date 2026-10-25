@@ -48,6 +48,12 @@ class Host(Protocol):
     def disk_free(self, path: str) -> int | None:
         """Free bytes on the file system holding ``path``, or None if unknown."""
 
+    def run_live(self, argv: Sequence[str]) -> int:
+        """Run a command with its output shown to the user (e.g. docker pull progress)."""
+
+    def spawn(self, argv: Sequence[str]) -> bool:
+        """Start a detached process (e.g. a terminal window); False if it could not start."""
+
 
 class LocalHost:
     """The machine this process runs on."""
@@ -97,3 +103,24 @@ class LocalHost:
             return shutil.disk_usage(path).free
         except OSError:
             return None
+
+    def run_live(self, argv: Sequence[str]) -> int:
+        try:
+            return subprocess.call(list(argv), env=self._env)
+        except (FileNotFoundError, PermissionError):
+            return 127
+
+    def spawn(self, argv: Sequence[str]) -> bool:
+        # A new session, so terminals that stay in the foreground (Konsole) do not block us.
+        try:
+            subprocess.Popen(
+                list(argv),
+                env=self._env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except (FileNotFoundError, PermissionError):
+            return False
+        return True

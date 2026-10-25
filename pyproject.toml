@@ -29,7 +29,7 @@ ornith-launcher = "ornith_launcher.cli:main"
 version = { attr = "ornith_launcher.__version__" }
 
 [tool.setuptools.package-data]
-ornith_launcher = ["data/*.json"]
+ornith_launcher = ["data/*.json", "data/*.txt"]
 
 [tool.ruff]
 target-version = "py39"

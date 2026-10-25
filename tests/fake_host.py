@@ -26,6 +26,9 @@ class FakeHost:
         self.links = dict(links or {})
         self.free = dict(free or {})
         self.calls: list[tuple[str, ...]] = []
+        self.live: list[tuple[str, ...]] = []
+        self.spawned: list[tuple[str, ...]] = []
+        self.live_codes: dict[tuple[str, ...], int] = {}
 
     @property
     def env(self) -> Mapping[str, str]:
@@ -34,7 +37,7 @@ class FakeHost:
     def run(self, argv: Sequence[str], timeout: float = 10.0) -> CommandResult | None:
         key = tuple(argv)
         self.calls.append(key)
-        if argv[0] not in self.programs:
+        if argv[0] not in self.programs and argv[0] not in self.programs.values():
             return None
         return self.commands.get(key, CommandResult(127, "", f"{argv[0]}: unexpected arguments"))
 
@@ -64,6 +67,14 @@ class FakeHost:
 
     def disk_free(self, path: str) -> int | None:
         return self.free.get(path)
+
+    def run_live(self, argv: Sequence[str]) -> int:
+        self.live.append(tuple(argv))
+        return self.live_codes.get(tuple(argv), 0)
+
+    def spawn(self, argv: Sequence[str]) -> bool:
+        self.spawned.append(tuple(argv))
+        return argv[0] in self.programs or argv[0].startswith("/")
 
 
 def ok(stdout: str) -> CommandResult:

@@ -1,0 +1,17 @@
+version: 1
+ornith-launcher (unofficial)
+
+This is an unofficial project. It is not affiliated with, endorsed by, or sponsored by
+Ornith AI, Anthropic, Anomaly/OpenCode, Hugging Face, Docker, NVIDIA, AMD, Intel or ggml.org.
+
+- The software is provided "as is", without warranty of any kind (Apache License 2.0).
+- Models are made by third parties and keep their own licences. Their behaviour, accuracy and
+  safety are their authors' responsibility; you must follow each model's licence and the law.
+- Uncensored models are hidden unless you opt in. You alone are responsible for how you use them.
+- Claude Code with local models is not supported by Anthropic.
+- Benchmarks were measured on one machine and are labelled TESTED, INFERRED or ESTIMATED.
+- Long-context runs keep the GPU hot for a long time. Use the tool at your own risk.
+- No telemetry. Connections go only to Hugging Face, ghcr.io and, if you choose them, the
+  official Claude Code and OpenCode installers.
+
+The full text is in DISCLAIMER.md.
