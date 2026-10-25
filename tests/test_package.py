@@ -1,25 +1,19 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
 import sys
 import unittest
-from importlib import resources
 from pathlib import Path
 
 import ornith_launcher
+from ornith_launcher.resources import load_json
 
 ROOT = Path(__file__).resolve().parent.parent
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 # Release, pre-release and dev versions as PEP 440 allows them, e.g. 0.1.0, 0.1.0rc1, 0.1.0.dev0.
 PEP440 = re.compile(r"\d+\.\d+\.\d+((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?")
-
-
-def load_pins() -> dict:
-    text = (resources.files("ornith_launcher") / "data" / "pins.json").read_text("utf-8")
-    return json.loads(text)
 
 
 class VersionTest(unittest.TestCase):
@@ -42,7 +36,7 @@ class VersionTest(unittest.TestCase):
 
 class PinsTest(unittest.TestCase):
     def setUp(self):
-        self.pins = load_pins()
+        self.pins = load_json("pins.json")
 
     def test_docker_images_are_pinned_by_digest(self):
         build = self.pins["llama_cpp"]["build"]

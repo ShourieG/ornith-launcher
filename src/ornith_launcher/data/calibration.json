@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "compute": {
+    "base_mib": 768,
+    "per_token_kib": 1.42,
+    "level": "ESTIMATED",
+    "source": "Fitted to the device + host compute buffers that llama.cpp b11552 fit-params reports for Ornith 1.5 35B-A3B at 262,144 and 1,048,576 tokens (2026-10-12). Other sizes are not checked."
+  },
+  "runtime_overhead": {
+    "base_mib": 3072,
+    "prompt_cache_share_of_kv": 0.25,
+    "level": "TESTED",
+    "source": "Peak MemTotal - MemAvailable minus the idle baseline on a DGX Spark, Ornith 1.5 35B-A3B Q8_0 with 4 slots at 262,144 and 1,048,576 tokens (2026-10-12)."
+  }
+}

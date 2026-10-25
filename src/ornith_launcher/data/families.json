@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "official_owners": ["ornith-ai", "deepreinforce-ai"],
+  "shapes": {
+    "qwen35-9b": {
+      "label": "9B",
+      "architecture": "qwen35",
+      "embedding_length": 4096,
+      "main_layers": 32,
+      "expert_count": 0
+    },
+    "qwen35moe-35b": {
+      "label": "35B",
+      "architecture": "qwen35moe",
+      "embedding_length": 2048,
+      "main_layers": 40,
+      "expert_count": 256
+    },
+    "qwen35moe-122b": {
+      "label": "122B",
+      "architecture": "qwen35moe",
+      "embedding_length": 3072,
+      "main_layers": 48,
+      "expert_count": 256
+    },
+    "qwen35moe-397b": {
+      "label": "397B",
+      "architecture": "qwen35moe",
+      "embedding_length": 4096,
+      "main_layers": 60,
+      "expert_count": 512
+    }
+  },
+  "families": [
+    {
+      "version": "1.0",
+      "size": "9B",
+      "shape": "qwen35-9b",
+      "official_repos": ["ornith-ai/Ornith-1.0-9B-GGUF"],
+      "base_repos": ["ornith-ai/Ornith-1.0-9B"],
+      "aliases": ["deepreinforce-ai/Ornith-1.0-9B"],
+      "native_ctx": 262144,
+      "yarn": "undocumented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": false
+    },
+    {
+      "version": "1.0",
+      "size": "35B",
+      "shape": "qwen35moe-35b",
+      "official_repos": ["ornith-ai/Ornith-1.0-35B-GGUF"],
+      "base_repos": ["ornith-ai/Ornith-1.0-35B"],
+      "aliases": ["deepreinforce-ai/Ornith-1.0-35B"],
+      "native_ctx": 262144,
+      "yarn": "undocumented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": false
+    },
+    {
+      "version": "1.0",
+      "size": "397B",
+      "shape": "qwen35moe-397b",
+      "official_repos": [],
+      "base_repos": ["ornith-ai/Ornith-1.0-397B"],
+      "aliases": ["deepreinforce-ai/Ornith-1.0-397B"],
+      "native_ctx": 262144,
+      "yarn": "undocumented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": true
+    },
+    {
+      "version": "1.5",
+      "size": "9B",
+      "shape": "qwen35-9b",
+      "official_repos": ["ornith-ai/Ornith-1.5-9B-GGUF"],
+      "base_repos": ["ornith-ai/Ornith-1.5-9B"],
+      "aliases": [],
+      "native_ctx": 262144,
+      "yarn": "documented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": false
+    },
+    {
+      "version": "1.5",
+      "size": "35B-A3B",
+      "shape": "qwen35moe-35b",
+      "official_repos": ["ornith-ai/Ornith-1.5-35B-A3B-GGUF"],
+      "base_repos": ["ornith-ai/Ornith-1.5-35B-A3B"],
+      "aliases": [],
+      "native_ctx": 262144,
+      "yarn": "documented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": false
+    },
+    {
+      "version": "1.5",
+      "size": "122B",
+      "shape": "qwen35moe-122b",
+      "official_repos": ["ornith-ai/Ornith-1.5-122B-GGUF"],
+      "base_repos": ["ornith-ai/Ornith-1.5-122B"],
+      "aliases": [],
+      "native_ctx": 262144,
+      "yarn": "documented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": false
+    },
+    {
+      "version": "1.5",
+      "size": "397B",
+      "shape": "qwen35moe-397b",
+      "official_repos": ["ornith-ai/Ornith-1.5-397B-GGUF"],
+      "base_repos": ["ornith-ai/Ornith-1.5-397B"],
+      "aliases": [],
+      "native_ctx": 262144,
+      "yarn": "documented",
+      "sampling": { "temperature": 0.6, "top_p": 0.95, "top_k": 20 },
+      "untested_locally": true
+    }
+  ]
+}
