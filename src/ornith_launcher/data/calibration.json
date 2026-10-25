@@ -11,5 +11,15 @@
     "prompt_cache_share_of_kv": 0.25,
     "level": "TESTED",
     "source": "Peak MemTotal - MemAvailable minus the idle baseline on a DGX Spark, Ornith 1.5 35B-A3B Q8_0 with 4 slots at 262,144 and 1,048,576 tokens (2026-10-12)."
+  },
+  "moe_offload": {
+    "margin": 0.02,
+    "level": "ESTIMATED",
+    "source": "Added to both sides of the split between GPU and system RAM when experts run on the CPU (--cpu-moe), because the expert share in families.json counts parameters, not bytes, and quantisation is not uniform across tensors. Not measured."
+  },
+  "cpu_overhead": {
+    "base_mib": 1024,
+    "level": "ESTIMATED",
+    "source": "Replaces runtime_overhead.base_mib on CPU-only machines, which have no GPU driver context. Not measured."
   }
 }

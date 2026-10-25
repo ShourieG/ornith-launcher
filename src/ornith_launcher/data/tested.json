@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "machines": {
+    "dgx-spark": "NVIDIA DGX Spark (GB10, 128 GB unified memory, arm64), Ubuntu, Docker, llama.cpp b11552 (server-cuda13)"
+  },
+  "results": [
+    {
+      "repo": "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
+      "file": "Ornith-1.5-35B-Q8_0.gguf",
+      "context": 1048576,
+      "kv": "f16",
+      "level": "TESTED",
+      "machine": "dgx-spark",
+      "date": "2026-10-12",
+      "note": "Multi-needle retrieval 6/6 at 917k tokens; perplexity +0.2% vs native; peak memory 67.2-70.0 GiB."
+    },
+    {
+      "repo": "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
+      "file": "Ornith-1.5-35B-Q8_0.gguf",
+      "context": 524288,
+      "kv": "f16",
+      "level": "INFERRED",
+      "machine": "dgx-spark",
+      "date": "2026-10-12",
+      "note": "Skipped for GPU heat; inferred from the uncensored build of the same architecture and quant, and from this file at 1M."
+    },
+    {
+      "repo": "ornith-ai/Ornith-1.5-35B-A3B-GGUF",
+      "file": "Ornith-1.5-35B-Q8_0.gguf",
+      "context": 262144,
+      "kv": "f16",
+      "level": "INFERRED",
+      "machine": "dgx-spark",
+      "date": "2026-10-12",
+      "note": "Skipped for GPU heat; inferred from the uncensored build of the same architecture and quant, and from this file at 1M."
+    },
+    {
+      "repo": "dealignai/Ornith-1.5-35B-A3B-UNCENSORED-GGUF",
+      "file": "Ornith-1.5-35B-A3B-CRACK-Q8_0.gguf",
+      "context": 1048576,
+      "kv": "f16",
+      "level": "TESTED",
+      "machine": "dgx-spark",
+      "date": "2026-10-12",
+      "note": "Multi-needle retrieval 6/6 at 917k tokens; perplexity +0.4% vs native."
+    },
+    {
+      "repo": "dealignai/Ornith-1.5-35B-A3B-UNCENSORED-GGUF",
+      "file": "Ornith-1.5-35B-A3B-CRACK-Q8_0.gguf",
+      "context": 524288,
+      "kv": "f16",
+      "level": "TESTED",
+      "machine": "dgx-spark",
+      "date": "2026-10-12",
+      "note": "Multi-needle retrieval 3/3 at 456k tokens; peak memory 56.6-57.4 GiB."
+    },
+    {
+      "repo": "dealignai/Ornith-1.5-35B-A3B-UNCENSORED-GGUF",
+      "file": "Ornith-1.5-35B-A3B-CRACK-Q8_0.gguf",
+      "context": 262144,
+      "kv": "f16",
+      "level": "TESTED",
+      "machine": "dgx-spark",
+      "date": "2026-10-12",
+      "note": "Multi-needle retrieval 2/2 at 240k tokens; peak memory 50.9-51.4 GiB."
+    }
+  ]
+}

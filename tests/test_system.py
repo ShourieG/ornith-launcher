@@ -177,6 +177,7 @@ class MemoryTest(unittest.TestCase):
     def test_cpu_only_and_container_limits(self):
         memory = MemoryInfo(total=64 * GIB, available=60 * GIB, docker_limit=32 * GIB)
         (pool,) = build_pools(memory, [])
+        self.assertEqual(pool.kind, PoolKind.RAM)
         self.assertEqual(pool.total, 32 * GIB)
         limited = MemoryInfo(total=64 * GIB, available=60 * GIB, cgroup_limit=16 * GIB)
         self.assertEqual(build_pools(limited, [])[0].total, 16 * GIB)

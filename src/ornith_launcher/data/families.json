@@ -1,12 +1,14 @@
 {
   "schema_version": 1,
   "official_owners": ["ornith-ai", "deepreinforce-ai"],
+  "search_queries": ["Ornith"],
   "shapes": {
     "qwen35-9b": {
       "label": "9B",
       "architecture": "qwen35",
       "embedding_length": 4096,
       "main_layers": 32,
+      "params_b": 9,
       "expert_count": 0
     },
     "qwen35moe-35b": {
@@ -14,21 +16,30 @@
       "architecture": "qwen35moe",
       "embedding_length": 2048,
       "main_layers": 40,
-      "expert_count": 256
+      "params_b": 35,
+      "expert_count": 256,
+      "preferred_from_quant": "Q6_K",
+      "expert_share": 0.944
     },
     "qwen35moe-122b": {
       "label": "122B",
       "architecture": "qwen35moe",
       "embedding_length": 3072,
       "main_layers": 48,
-      "expert_count": 256
+      "params_b": 122,
+      "expert_count": 256,
+      "preferred_from_quant": "Q4_K_M",
+      "expert_share": 0.948
     },
     "qwen35moe-397b": {
       "label": "397B",
       "architecture": "qwen35moe",
       "embedding_length": 4096,
       "main_layers": 60,
-      "expert_count": 512
+      "params_b": 397,
+      "expert_count": 512,
+      "preferred_from_quant": "Q4_K_M",
+      "expert_share": 0.976
     }
   },
   "families": [

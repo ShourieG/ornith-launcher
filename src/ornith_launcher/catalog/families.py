@@ -28,6 +28,11 @@ class Shape:
     embedding_length: int
     main_layers: int
     expert_count: int
+    params_b: float = 0.0  # parameters in billions, to tell a full model from a partial file
+    # This size ranks above smaller sizes only at this quant or better (design 8.5 rule 6).
+    preferred_from_quant: str | None = None
+    # MoE only: share of the weights in routed experts, which --cpu-moe moves to system RAM.
+    expert_share: float = 0.0
 
     def matches(self, arch: ModelArch) -> bool:
         return (
@@ -68,6 +73,7 @@ class Families:
     official_owners: tuple[str, ...]
     shapes: Mapping[str, Shape]
     families: tuple[Family, ...]
+    search_queries: tuple[str, ...] = ("Ornith",)  # Hugging Face name searches for discovery
 
     @property
     def versions(self) -> tuple[str, ...]:
@@ -110,11 +116,15 @@ class Families:
                     embedding_length=int(raw["embedding_length"]),
                     main_layers=int(raw["main_layers"]),
                     expert_count=int(raw["expert_count"]),
+                    preferred_from_quant=raw.get("preferred_from_quant"),
+                    expert_share=float(raw.get("expert_share", 0.0)),
+                    params_b=float(raw.get("params_b", 0.0)),
                 )
                 for shape_id, raw in data["shapes"].items()
             }
             families = tuple(_family_from_dict(raw) for raw in data["families"])
             owners = tuple(str(owner) for owner in data["official_owners"])
+            queries = tuple(str(query) for query in data.get("search_queries", ("Ornith",)))
         except (KeyError, TypeError, ValueError) as exc:
             raise DataFileError(f"{FAMILIES_FILE} is malformed: {exc!r}") from exc
 
@@ -130,7 +140,7 @@ class Families:
             if key in seen:
                 raise DataFileError(f"{family.display_name} is listed twice")
             seen.add(key)
-        return cls(official_owners=owners, shapes=shapes, families=families)
+        return cls(official_owners=owners, shapes=shapes, families=families, search_queries=queries)
 
 
 def _family_from_dict(raw: Mapping[str, Any]) -> Family:

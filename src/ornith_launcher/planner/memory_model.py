@@ -46,6 +46,8 @@ class Calibration:
     compute_per_token: float
     overhead_base: int
     prompt_cache_share_of_kv: float
+    cpu_overhead_base: int = 1024 * 1024**2
+    moe_margin: float = 0.02
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Calibration:
@@ -53,20 +55,25 @@ class Calibration:
         try:
             compute = data["compute"]
             overhead = data["runtime_overhead"]
+            moe = data["moe_offload"]
+            cpu = data["cpu_overhead"]
             calibration = cls(
                 compute_base=int(compute["base_mib"]) * MIB,
                 compute_per_token=float(compute["per_token_kib"]) * KIB,
                 overhead_base=int(overhead["base_mib"]) * MIB,
                 prompt_cache_share_of_kv=float(overhead["prompt_cache_share_of_kv"]),
+                cpu_overhead_base=int(cpu["base_mib"]) * MIB,
+                moe_margin=float(moe["margin"]),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise DataFileError(f"{CALIBRATION_FILE} is malformed: {exc!r}") from exc
         if min(calibration.compute_base, calibration.compute_per_token) < 0:
             raise DataFileError(f"{CALIBRATION_FILE} has a negative compute constant")
-        if calibration.overhead_base < 0:
+        if min(calibration.overhead_base, calibration.cpu_overhead_base) < 0:
             raise DataFileError(f"{CALIBRATION_FILE} has a negative overhead constant")
-        if not 0 <= calibration.prompt_cache_share_of_kv <= 1:
-            raise DataFileError(f"{CALIBRATION_FILE}: prompt_cache_share_of_kv must be 0 to 1")
+        for name in ("prompt_cache_share_of_kv", "moe_margin"):
+            if not 0 <= getattr(calibration, name) <= 1:
+                raise DataFileError(f"{CALIBRATION_FILE}: {name} must be 0 to 1")
         return calibration
 
 
@@ -127,10 +134,20 @@ def compute_buffer_bytes(context: int, calibration: Calibration) -> int:
     return calibration.compute_base + round(calibration.compute_per_token * context)
 
 
-def runtime_overhead_bytes(kv_bytes: int, cache_ram: int, calibration: Calibration) -> int:
+def runtime_overhead_bytes(
+    kv_bytes: int, cache_ram: int, calibration: Calibration, gpu: bool = True
+) -> int:
     """Driver context, extra slots and the host prompt cache: what llama.cpp's estimate omits."""
-    prompt_cache = min(cache_ram, round(calibration.prompt_cache_share_of_kv * kv_bytes))
-    return calibration.overhead_base + prompt_cache
+    return overhead_base(calibration, gpu) + prompt_cache_bytes(kv_bytes, cache_ram, calibration)
+
+
+def overhead_base(calibration: Calibration, gpu: bool = True) -> int:
+    return calibration.overhead_base if gpu else calibration.cpu_overhead_base
+
+
+def prompt_cache_bytes(kv_bytes: int, cache_ram: int, calibration: Calibration) -> int:
+    """The host prompt cache (``--cache-ram``) grows with use, up to its limit."""
+    return min(cache_ram, round(calibration.prompt_cache_share_of_kv * kv_bytes))
 
 
 def estimate_memory(
@@ -143,6 +160,7 @@ def estimate_memory(
     kv_type: str = "f16",
     mmproj: int = 0,
     cache_ram: int = DEFAULT_CACHE_RAM_BYTES,
+    gpu: bool = True,
 ) -> MemoryEstimate:
     """Estimate the memory a server needs.
 
@@ -158,7 +176,7 @@ def estimate_memory(
         kv_cache=kv,
         recurrent=recurrent_state_bytes(arch, slots),
         compute=compute_buffer_bytes(context, calibration),
-        overhead=runtime_overhead_bytes(kv, cache_ram, calibration),
+        overhead=runtime_overhead_bytes(kv, cache_ram, calibration, gpu),
     )
 
 

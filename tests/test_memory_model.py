@@ -137,6 +137,18 @@ class EstimateTest(unittest.TestCase):
             self.calibration.overhead_base + GIB,
         )
 
+    def test_cpu_only_machines_have_a_smaller_overhead(self):
+        gpu = mm.estimate_memory(
+            arch_for("9B"), weights=GIB, context=65536, calibration=self.calibration
+        )
+        cpu = mm.estimate_memory(
+            arch_for("9B"), weights=GIB, context=65536, calibration=self.calibration, gpu=False
+        )
+        self.assertEqual(
+            gpu.overhead - cpu.overhead,
+            self.calibration.overhead_base - self.calibration.cpu_overhead_base,
+        )
+
     def test_rejects_empty_context(self):
         with self.assertRaises(ValueError):
             mm.estimate_memory(arch_for("9B"), weights=1, context=0, calibration=self.calibration)
@@ -158,7 +170,7 @@ class CalibrationFileTest(unittest.TestCase):
         self.assertEqual(calibration.prompt_cache_share_of_kv, 0.25)
 
     def test_every_constant_is_labelled(self):
-        for section in ("compute", "runtime_overhead"):
+        for section in ("compute", "runtime_overhead", "cpu_overhead", "moe_offload"):
             with self.subTest(section=section):
                 self.assertIn(self.data[section]["level"], ("TESTED", "INFERRED", "ESTIMATED"))
                 self.assertTrue(self.data[section]["source"])
@@ -169,6 +181,7 @@ class CalibrationFileTest(unittest.TestCase):
             "negative compute": lambda d: d["compute"].update(base_mib=-1),
             "negative overhead": lambda d: d["runtime_overhead"].update(base_mib=-1),
             "0 to 1": lambda d: d["runtime_overhead"].update(prompt_cache_share_of_kv=2),
+            "moe_margin must": lambda d: d["moe_offload"].update(margin=-1),
         }
         for message, change in cases.items():
             with self.subTest(message), self.assertRaisesRegex(DataFileError, message):

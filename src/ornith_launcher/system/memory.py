@@ -29,9 +29,9 @@ _NO_CGROUP_LIMIT = 2**60
 
 
 class PoolKind(str, enum.Enum):
-    UNIFIED = "unified"  # GPU and CPU share it (or CPU only)
+    UNIFIED = "unified"  # the GPU and CPU share it
     VRAM = "vram"
-    RAM = "ram"  # system RAM next to discrete GPUs
+    RAM = "ram"  # system RAM: next to discrete GPUs, or the only pool on a CPU-only machine
 
 
 @dataclass(frozen=True)
@@ -160,7 +160,7 @@ def build_pools(memory: MemoryInfo, gpus: Iterable[Gpu]) -> tuple[Pool, ...]:
         name = f"Unified memory ({gpu.name})"
         return (_ram_pool(PoolKind.UNIFIED, name, total, baseline(total, ram_in_use), memory),)
 
-    return (_ram_pool(PoolKind.UNIFIED, "System RAM (CPU only)", ram_total, ram_baseline, memory),)
+    return (_ram_pool(PoolKind.RAM, "System RAM (CPU only)", ram_total, ram_baseline, memory),)
 
 
 def _ram_pool(kind: PoolKind, name: str, total: int, base: int, memory: MemoryInfo) -> Pool:
