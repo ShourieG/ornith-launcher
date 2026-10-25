@@ -47,7 +47,9 @@ def repair_hint(name: str) -> str:
 # Checks before starting -----------------------------------------------------------------
 
 
-def preflight(app: App, profile: Profile, runtime: DockerRuntime) -> list[str]:
+def preflight(
+    app: App, profile: Profile, runtime: DockerRuntime, check_image: bool = True
+) -> list[str]:
     """What stops this profile from starting, each with the fix (empty when all is well)."""
     problems = []
     for part in profile.model.parts:
@@ -77,7 +79,7 @@ def preflight(app: App, profile: Profile, runtime: DockerRuntime) -> list[str]:
         problems.append(
             f"The patched chat template {template.file} is missing. " + repair_hint(profile.name)
         )
-    if not runtime.image_present(profile.runtime.image):
+    if check_image and not runtime.image_present(profile.runtime.image):
         problems.append(
             f"The llama.cpp image {profile.runtime.image.split('@')[0]} is not downloaded. "
             + repair_hint(profile.name)

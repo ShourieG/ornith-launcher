@@ -33,9 +33,11 @@ one (or a download), and saves a profile. Later runs start the default profile.
 | `./ornith-launcher stop [NAME]` | Stop a server and free its memory |
 | `./ornith-launcher status` | What is running, and where models are stored |
 | `./ornith-launcher list` | Profiles |
+| `./ornith-launcher doctor` | Check Docker, the GPU, disk, the image, profiles and tools (read-only) |
 | `./ornith-launcher setup --integrations NAME` | Connect a profile to Claude Code or OpenCode |
 | `./ornith-launcher remove NAME` | Remove a profile (asks before deleting downloaded files) |
 | `./ornith-launcher uninstall` | Undo everything the launcher created |
+| `./ornith-launcher bench NAME` | Long-context and perplexity tests (long, hot GPU runs) |
 
 The server listens on 127.0.0.1 only. Models found on your machine are used where they are and never moved or
 deleted.
@@ -43,6 +45,10 @@ deleted.
 With Claude Code connected, run `ornith-claude` (or `ornith-claude-<profile>`) instead of `claude`; plain `claude`
 keeps using your Anthropic account. Anthropic does not support Claude Code with non-Claude models; see
 [DISCLAIMER.md](DISCLAIMER.md).
+
+Benchmark results so far: [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Supported hardware:
+[docs/HARDWARE.md](docs/HARDWARE.md). When something goes wrong: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+Licences and trademarks: [docs/LEGAL.md](docs/LEGAL.md). Credits: [CREDITS.md](CREDITS.md).
 
 ## Contributing
 

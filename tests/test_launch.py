@@ -332,3 +332,32 @@ class SetupProfileTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoctorTest(unittest.TestCase):
+    def test_reports_problems_with_fixes_and_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            host = FakeDocker(env={"HOME": str(root)})
+            out = io.StringIO()
+            app = App(
+                host=host,
+                paths=resolve_paths({}, root, "linux"),
+                out=out,
+                os_name="linux",
+                machine="aarch64",
+            )
+            p = profile(root)
+            save_profile(app.paths, p)
+            Path(p.model.parts[0]).unlink()
+            with mock.patch("ornith_launcher.catalog.catalog._load_seed", return_value=None):
+                code = cli.main(["doctor"], app=app)
+            text = out.getvalue()
+            self.assertEqual(code, 1)
+            self.assertIn("Catalog: empty. Fix: ornith-launcher scan --refresh", text)
+            self.assertIn(f"Profile {p.name}: 1 problem(s)", text)
+            self.assertIn("setup --repair", text)
+            self.assertEqual(host.live, [])
+            self.assertFalse(
+                [c for c in host.calls if c[:2] in (("docker", "run"), ("docker", "rm"))]
+            )

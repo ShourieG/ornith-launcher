@@ -28,8 +28,14 @@ All notable changes to this project are recorded here. The format follows
   `monitor`, `remove` and `uninstall` commands; `ornith-launcher` alone runs setup the first time and launches the
   default profile after that. The server listens on 127.0.0.1 only, and Ctrl+C stops it (default yes).
 - `setup --repair NAME` puts back a missing image or download.
+- `doctor` command: a read-only check of Docker, GPU access, disk space, the llama.cpp image, the catalog, every
+  profile's files and the optional tools, each problem with its fix.
 - Claude Code and OpenCode: setup can connect a profile to either or both, installing them with their official
   installers when asked. Claude Code runs through `ornith-claude-<profile>` (and `ornith-claude` for the default
   profile) without touching your own Claude Code settings, with a chat-template fix applied to a copy so system
   messages in mid-conversation work. OpenCode gets a provider entry; the config file is backed up first, and a
   file with comments is never rewritten without asking. `setup --integrations NAME` changes this later.
+- `bench` command: the multi-needle long-context test and llama.cpp perplexity, with a pause whenever the GPU
+  reaches 80 °C until it cools to 60 °C. Results go to a local JSONL file with the machine, build, image and
+  model checksum. `docs/BENCHMARKS.md` lists the DGX Spark results, each labelled TESTED, INFERRED or ESTIMATED,
+  and is generated from `data/tested.json`.

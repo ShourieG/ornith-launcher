@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import logging
 
-from ornith_launcher import __version__, launch, scan, uninstall, wizard
+from ornith_launcher import __version__, doctor, launch, scan, uninstall, wizard
 from ornith_launcher.app import App
+from ornith_launcher.bench import run as bench
 from ornith_launcher.errors import OrnithLauncherError
 
 PROG = "ornith-launcher"
@@ -65,6 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     uninstall_parser.add_argument("--yes", action="store_true", help="accept the defaults")
     uninstall_parser.set_defaults(handler=uninstall.run_uninstall)
+
+    doctor_parser = commands.add_parser(
+        "doctor", help="check everything the launcher needs (read-only)"
+    )
+    doctor_parser.set_defaults(handler=doctor.run_doctor)
+
+    bench_parser = commands.add_parser(
+        "bench", help="needle and perplexity tests (long GPU runs; pauses when hot)"
+    )
+    bench.add_arguments(bench_parser)
+    bench_parser.set_defaults(handler=bench.run_bench)
     return parser
 
 
