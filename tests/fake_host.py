@@ -29,6 +29,10 @@ class FakeHost:
         self.live: list[tuple[str, ...]] = []
         self.spawned: list[tuple[str, ...]] = []
         self.live_codes: dict[tuple[str, ...], int] = {}
+        self.processes: dict[int, str] = {}  # pid -> command line
+        self.terminated: list[int] = []
+        self.streamed: list[tuple[str, ...]] = []
+        self.stream_lines: dict[tuple[str, ...], list[str]] = {}  # command -> its output
 
     @property
     def env(self) -> Mapping[str, str]:
@@ -75,6 +79,30 @@ class FakeHost:
     def spawn(self, argv: Sequence[str]) -> bool:
         self.spawned.append(tuple(argv))
         return argv[0] in self.programs or argv[0].startswith("/")
+
+    def process_command(self, pid: int) -> str | None:
+        return self.processes.get(pid)
+
+    def terminate(self, pid: int) -> None:
+        self.terminated.append(pid)
+        self.processes.pop(pid, None)
+
+    def stream(self, argv: Sequence[str]):
+        self.streamed.append(tuple(argv))
+        lines = self.stream_lines.get(tuple(argv))
+        return None if lines is None else FakeStream(lines)
+
+
+class FakeStream:
+    def __init__(self, lines):
+        self._lines = list(lines)
+        self.closed = False
+
+    def lines(self):
+        yield from self._lines  # all of them, closed or not, so tests see a fixed output
+
+    def close(self):
+        self.closed = True
 
 
 def ok(stdout: str) -> CommandResult:

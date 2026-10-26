@@ -16,8 +16,19 @@ The models this tool downloads and runs are made by third parties. Their behavio
 are the responsibility of the model authors. You must follow each model's licence and the law that applies to you.
 
 Some community models are "uncensored" or "abliterated": their safety behaviour has been removed, and they can
-produce harmful or illegal content. ornith-launcher hides them unless you opt in, and it does not endorse them. You
-alone are responsible for how you use them.
+produce harmful or illegal content. ornith-launcher tries to hide them unless you opt in, and it does not endorse,
+review or vouch for them. The opt-in is saved: once you show them, they appear in every list and search, in later
+runs too, until you hide them again. You alone are responsible for how you use these models and for following the
+law where you live.
+
+Hiding and labelling these models is best effort. It is not a content filter, and it is no guarantee of how any
+model behaves. The launcher can only go by what uploaders publish on Hugging Face: names, tags and the models a
+file was made from. So the label can be wrong in either direction: a model that does not describe itself can appear
+in the normal lists without it, and the "only uncensored" list may miss some or include others. Its order (best fit
+first, or the memory, size, likes or downloads sort you pick) is not a recommendation. Before you use a community
+model, read its Hugging Face model card; every model in the lists links to it. Describing a model accurately is the
+responsibility of whoever published it. If you find an uncensored model without the label, please report it at
+https://github.com/ShourieG/ornith-launcher/issues so the keyword list can be updated.
 
 ## Claude Code with local models
 
@@ -47,4 +58,5 @@ subscription. Docker Engine on Linux is not affected.
 
 ornith-launcher has no telemetry. It connects only to Hugging Face (models), ghcr.io (llama.cpp Docker images on
 Linux), GitHub (llama.cpp release binaries on Windows and macOS) and, if you choose them, the official Claude Code
-and OpenCode installers.
+and OpenCode installers. The optional chat log shows your requests and the model's replies on your own screen; it
+keeps the last few in memory while the server runs and never saves or sends them.

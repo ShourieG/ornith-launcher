@@ -61,6 +61,8 @@ class FakeDocker(FakeHost):
         self.other = ""  # extra lines for docker ps
         self.run_fails = False
         self.fit_output = "CUDA0 34667 5182 757\nHost 515 0 272\n"
+        self.other_tags = False  # other tags keep an image when ours is removed
+        self.picked_port = 49153  # the port Docker picks for a server behind the chat log
 
     def run(self, argv, timeout=10.0):
         if argv[0] != "docker":
@@ -80,6 +82,11 @@ class FakeDocker(FakeHost):
                 return CommandResult(0, "\n".join(names), "")
             lines = [f"{n}\t{c['Config']['Image']}" for n, c in self.containers.items()]
             return CommandResult(0, "\n".join(lines + ([self.other] if self.other else [])), "")
+        if args[:3] == ["docker", "image", "rm"]:
+            if self.other_tags:
+                return CommandResult(0, f"Untagged: {args[3]}\n", "")
+            self.images.clear()
+            return CommandResult(0, f"Untagged: {args[3]}\nDeleted: sha256:abc\n", "")
         if args[:3] == ["docker", "rm", "-f"]:
             self.containers.pop(args[3], None)
             return CommandResult(0, "", "")
@@ -88,11 +95,18 @@ class FakeDocker(FakeHost):
                 return CommandResult(125, "", "docker: Error response from daemon: boom")
             name = args[args.index("--name") + 1]
             labels = dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "--label")
+            published = args[args.index("-p") + 1].split(":")[1]  # "" when Docker picks it
             self.containers[name] = {
                 "State": {"Status": "running"},
                 "Config": {"Image": IMAGE, "Labels": labels},
+                "HostPort": published or str(self.picked_port),
             }
             return CommandResult(0, "abc123\n", "")
+        if args[:2] == ["docker", "port"]:
+            info = self.containers.get(args[2])
+            if info is None:
+                return CommandResult(1, "", "No such container")
+            return CommandResult(0, f"127.0.0.1:{info['HostPort']}\n", "")
         if args[:3] == ["docker", "run", "--rm"]:
             return CommandResult(0, self.fit_output, "")
         if args[:2] == ["docker", "logs"]:
@@ -107,9 +121,11 @@ class FakeHttp:
         self.models = {"data": [{"id": "ornith-1.5-35b-q8_0"}]}
         self.metrics = "llamacpp:requests_processing 2\n"
         self.posts = []
+        self.gets = []
         self.chat_status = 200
 
     def get(self, url, timeout=3.0):
+        self.gets.append(url)
         if url.endswith("/health"):
             status = self.health.pop(0) if len(self.health) > 1 else self.health[0]
             return Reply(status, b"{}")

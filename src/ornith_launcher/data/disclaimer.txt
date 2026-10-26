@@ -7,7 +7,11 @@ Ornith AI, Anthropic, Anomaly/OpenCode, Hugging Face, Docker, NVIDIA, AMD, Intel
 - The software is provided "as is", without warranty of any kind (Apache License 2.0).
 - Models are made by third parties and keep their own licences. Their behaviour, accuracy and
   safety are their authors' responsibility; you must follow each model's licence and the law.
-- Uncensored models are hidden unless you opt in. You alone are responsible for how you use them.
+- Uncensored models are hidden unless you opt in. Once shown, they stay in every list and
+  search, in later runs too, until you hide them again. Hiding them is best effort, not a
+  content filter: the launcher goes by names, tags and lineage, so a model that does not say
+  what it is can slip into the normal lists. Read a community model's card (linked in the
+  lists) before you use it. You alone are responsible for how you use any model.
 - Claude Code with local models is not supported by Anthropic.
 - Benchmarks were measured on one machine and are labelled TESTED, INFERRED or ESTIMATED.
 - Long-context runs keep the GPU hot for a long time. Use the tool at your own risk.

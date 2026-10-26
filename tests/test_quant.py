@@ -15,7 +15,7 @@ class QuantFromNameTest(unittest.TestCase):
             "Ornith-1.5-35B-Q8_0.gguf": "Q8_0",
             "Ornith-1.5-397B-IQ1_S.gguf": "IQ1_S",
             "Ornith-1.5-397B-IQ2_XXS.gguf": "IQ2_XXS",
-            "Ornith-1.5-35B-A3B-UNCENSORED-CRACK-Q8_0.gguf": "Q8_0",
+            "Ornith-1.5-35B-A3B-UNCENSORED-TEST-Q8_0.gguf": "Q8_0",
             "Ornith-1.5-9B-uncensored.i1-Q4_K_S.gguf": "Q4_K_S",
             "UD-IQ1_S/Ornith-1.0-397B-UD-IQ1_S-00001-of-00003.gguf": "UD-IQ1_S",
             "Ornith-1.0-397B-UD-Q2_K_XL.gguf": "UD-Q2_K_XL",

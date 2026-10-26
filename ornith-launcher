@@ -22,26 +22,46 @@ while [ -L "$self" ]; do
 done
 here=$(cd "$(dir_of "$self")" && pwd -P)
 
+# python3 first; then versioned names, newest first, for systems whose python3
+# is older but have a newer Python installed alongside (Ubuntu 20.04, RHEL 8).
 python=
-for candidate in python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1 &&
-        "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+too_old=
+for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
         python=$candidate
         break
+    fi
+    if [ -z "$too_old" ]; then
+        version=$("$candidate" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) ||
+            version=
+        if [ -n "$version" ]; then
+            too_old="$candidate here is $version"
+        fi
     fi
 done
 
 if [ -z "$python" ]; then
-    echo "ornith-launcher needs Python 3.9 or newer, and none was found." >&2
+    if [ -n "$too_old" ]; then
+        echo "ornith-launcher needs Python 3.9 or newer; $too_old." >&2
+    else
+        echo "ornith-launcher needs Python 3.9 or newer, and none was found." >&2
+    fi
     case $(uname -s 2>/dev/null || true) in
         Darwin)
             echo "Install it with: xcode-select --install" >&2
             echo "            or: brew install python" >&2
             ;;
         *)
-            echo "Install it with your package manager, for example:" >&2
-            echo "  Debian/Ubuntu: sudo apt install python3" >&2
-            echo "  Fedora:        sudo dnf install python3" >&2
+            if [ -n "$too_old" ]; then
+                echo "Install a newer one alongside it, for example:" >&2
+                echo "  Ubuntu 20.04:  sudo apt install python3.9" >&2
+                echo "  RHEL/Rocky 8:  sudo dnf install python39" >&2
+            else
+                echo "Install it with your package manager, for example:" >&2
+                echo "  Debian/Ubuntu: sudo apt install python3" >&2
+                echo "  Fedora:        sudo dnf install python3" >&2
+            fi
             ;;
     esac
     exit 1

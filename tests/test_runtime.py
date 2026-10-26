@@ -16,7 +16,7 @@ from ornith_launcher.runtime.docker import (
     parse_fit_params,
     run_args,
 )
-from ornith_launcher.runtime.monitor import Monitor, ask_to_stop, status_line
+from ornith_launcher.runtime.monitor import Monitor, ask_to_stop, status_line, stop_banner
 from ornith_launcher.runtime.server import ServerConfig, fit_params_args, server_args
 from tests.runtime_fixtures import IMAGE, FakeDocker, FakeHttp, profile
 
@@ -91,6 +91,13 @@ class DockerArgsTest(unittest.TestCase):
         bigger = replace(p, runtime=replace(p.runtime, context=524288, yarn_factor=2))
         self.assertNotEqual(first, rt.args_hash(run_args(bigger)))
 
+    def test_behind_the_chat_log_docker_picks_the_port(self):
+        p = profile(self.root)
+        args = run_args(p, proxied=True)
+        self.assertIn("127.0.0.1::8080", args)
+        self.assertNotIn("127.0.0.1:18400:8080", args)
+        self.assertNotEqual(rt.args_hash(args), rt.args_hash(run_args(p)))
+
     def test_split_parts_projector_template_and_selinux(self):
         p = profile(self.root)
         parts = [str(self.root / f"M-0000{i}-of-00002.gguf") for i in (1, 2)]
@@ -144,6 +151,37 @@ class DockerRuntimeTest(unittest.TestCase):
         changed = replace(self.profile, runtime=replace(self.profile.runtime, slots=1))
         with self.assertRaisesRegex(ServerError, "different settings"):
             self.runtime.start(changed)
+
+    def test_a_chat_log_mismatch_is_named(self):
+        self.runtime.start(self.profile)
+        with self.assertRaisesRegex(ServerError, "the chat log is on for one and off"):
+            self.runtime.start(self.profile, proxied=True)
+
+    def test_checks_go_straight_to_the_server_behind_the_chat_log(self):
+        self.runtime.start(self.profile, proxied=True)
+        self.assertEqual(self.runtime.host_port(self.profile), 49153)
+        self.assertEqual(self.runtime.api_url(self.profile), "http://127.0.0.1:49153")
+        # A restarted container may get another port; the proxy asks Docker again.
+        self.host.containers[rt.container_name(self.profile.name)]["HostPort"] = "49200"
+        self.assertEqual(self.runtime.host_port(self.profile), 49153)
+        self.assertEqual(self.runtime.host_port(self.profile, cached=False), 49200)
+        self.host.containers[rt.container_name(self.profile.name)]["HostPort"] = "49153"
+        self.runtime.host_port(self.profile, cached=False)
+        self.runtime.wait_ready(self.profile)
+        self.runtime.warm_up(self.profile)
+        self.runtime.verify(self.profile)
+        self.runtime.requests_in_progress(self.profile)
+        urls = self.http.gets + [url for url, _ in self.http.posts]
+        self.assertTrue(urls)
+        self.assertTrue(all(u.startswith("http://127.0.0.1:49153/") for u in urls), urls)
+        # Without the chat log the server has the profile's own port.
+        self.runtime.stop(self.profile)
+        self.runtime.start(self.profile)
+        self.assertEqual(self.runtime.api_url(self.profile), self.profile.url)
+        # A server that is not running has no port; the profile's URL is the fallback.
+        self.runtime.stop(self.profile)
+        self.assertIsNone(self.runtime.host_port(self.profile))
+        self.assertEqual(self.runtime.api_url(self.profile), self.profile.url)
 
     def test_stopped_container_is_replaced(self):
         self.runtime.start(self.profile)
@@ -250,6 +288,7 @@ class MonitorTest(unittest.TestCase):
         self.assertFalse(ask_to_stop(out, lambda t: "n\n"))
         self.assertTrue(ask_to_stop(out, lambda t: None))  # no answer in time
         self.assertIn("no answer in 30 s", out.getvalue())
+        self.assertIn("Stop the server and free its memory? [Y/n] (default: yes) ", out.getvalue())
 
         def second_ctrl_c(timeout):
             raise KeyboardInterrupt
@@ -272,6 +311,133 @@ class MonitorTest(unittest.TestCase):
         self.assertTrue(monitor.run())
         self.assertEqual(self.runtime.status(self.profile).state, "missing")
         self.assertIn("memory is free again", out.getvalue())
+
+    def test_c_and_enter_reopens_the_chat_log_window(self):
+        now = [0.0]
+        answers = ["c\n", "x\n"]
+
+        def read_answer(timeout):
+            if answers:
+                now[0] += 1
+                return answers.pop(0)
+            now[0] += timeout
+            return None
+
+        reopened = []
+        out = io.StringIO()
+        monitor = Monitor(
+            self.host,
+            self.runtime,
+            self.profile,
+            out=out,
+            read_answer=read_answer,
+            clock=lambda: now[0],
+            reopen_chat=lambda: reopened.append(True),
+        )
+        self.assertFalse(monitor.run(max_lines=1))
+        self.assertEqual(reopened, [True])  # other input is ignored
+        self.assertIn("c and Enter reopens the chat log window", out.getvalue())
+
+    def test_closed_input_stops_watching_for_keys(self):
+        slept = []
+        monitor = Monitor(
+            self.host,
+            self.runtime,
+            self.profile,
+            out=io.StringIO(),
+            sleep=slept.append,
+            read_answer=lambda t: None,  # end of input at once
+            clock=lambda: 0.0,
+            reopen_chat=lambda: None,
+        )
+        monitor.run(max_lines=1)
+        self.assertIsNone(monitor.reopen_chat)
+        self.assertEqual(slept, [monitor.interval])
+
+    def test_the_banner_explains_the_chat_log_only_when_there_is_one(self):
+        plain = "\n".join(stop_banner("p1"))
+        with_chat = "\n".join(stop_banner("p1", chat_log=True))
+        self.assertIn("The server's log shows below, with a status line (--) every 15 s.", plain)
+        self.assertNotIn("chat", plain)
+        self.assertIn(
+            "Ctrl+C there, or\n  closing it, closes only that window, never the server.", with_chat
+        )
+        self.assertIn("It closes by\n  itself when the server stops.", with_chat)
+        self.assertIn("Press c and Enter here", with_chat)
+        self.assertIn("an old one still open is closed", with_chat)
+
+    def log_lines(self, *lines):
+        name = rt.container_name(self.profile.name)
+        self.host.stream_lines[("docker", "logs", "--follow", "--tail", "0", name)] = list(lines)
+
+    def test_the_server_log_shows_between_status_lines_without_our_own_polling(self):
+        self.log_lines(
+            "srv  log_server_r: request: GET /metrics 127.0.0.1 200",
+            "srv  log_server_r: request: GET /health 127.0.0.1 200",
+            "slot print_timing: id  0 | task 7 | prompt eval time =  12.00 ms",
+            "srv  log_server_r: request: POST /v1/messages 127.0.0.1 200",
+            "",
+        )
+        out = io.StringIO()
+        ticks = []
+        monitor = Monitor(
+            self.host,
+            self.runtime,
+            self.profile,
+            out=out,
+            sleep=lambda s: None,
+            now=lambda: "12:00:00",
+            on_tick=lambda: ticks.append(True),
+        )
+        self.assertFalse(monitor.run(max_lines=2))
+        text = out.getvalue()
+        self.assertIn("prompt eval time", text)
+        self.assertIn("request: POST /v1/messages", text)
+        self.assertNotIn("/metrics", text)
+        self.assertNotIn("/health", text)
+        self.assertEqual(text.count("\n-- 12:00:00  "), 2)
+        self.assertEqual(ticks, [True, True])
+
+    def test_log_lines_wait_while_the_stop_question_is_asked(self):
+        from tests.fake_host import FakeStream
+
+        out = io.StringIO()
+        monitor = Monitor(self.host, self.runtime, self.profile, out=out, read_answer=lambda t: "n")
+        monitor._paused = True
+        monitor._read_log(FakeStream(["slot launch_slot_: id 0 | task 9 | processing task"]))
+        self.assertEqual(out.getvalue(), "")
+        self.assertFalse(monitor.interrupted())  # "n": keep it running, then show the line
+        self.assertIn("processing task", out.getvalue())
+
+    def test_stopping_the_server_closes_the_chat_log(self):
+        def interrupt(seconds):
+            raise KeyboardInterrupt
+
+        stops = []
+        monitor = Monitor(
+            self.host,
+            self.runtime,
+            self.profile,
+            out=io.StringIO(),
+            sleep=interrupt,
+            read_answer=lambda t: "",
+            on_stop=lambda: stops.append("ctrl+c"),
+        )
+        self.assertTrue(monitor.run())
+        self.assertEqual(stops, ["ctrl+c"])
+        # Stopped elsewhere: the chat log closes too.
+        self.runtime.start(self.profile)
+        self.runtime.stop(self.profile)
+        monitor = Monitor(
+            self.host,
+            self.runtime,
+            self.profile,
+            out=io.StringIO(),
+            sleep=lambda s: None,
+            on_stop=lambda: stops.append("gone"),
+        )
+        monitor.run(max_lines=2)
+        self.assertEqual(stops, ["ctrl+c", "gone"])
 
     def test_monitor_closes_when_the_server_is_gone(self):
         self.runtime.stop(self.profile)

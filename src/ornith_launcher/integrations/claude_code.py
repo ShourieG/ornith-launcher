@@ -9,12 +9,14 @@ non-Claude models; the setup screen and DISCLAIMER.md say so.
 from __future__ import annotations
 
 import os
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 
 from ornith_launcher import __version__
 from ornith_launcher.config import atomic_write_text
 from ornith_launcher.profiles import Profile
+from ornith_launcher.ui.plain import context_label
 
 ANTHROPIC_NOTICE = (
     "Anthropic's docs: \"Anthropic doesn't endorse, maintain, or audit third-party gateway "
@@ -47,8 +49,23 @@ def alias_path(home: Path) -> Path:
 
 
 def display_name(profile: Profile) -> str:
+    """The name Claude Code and OpenCode list: the model's own name, quant, tag and context.
+
+    "Ornith-1.5-9B-uncensored Q8_0 [UNCENSORED], 262k context (local)". The repo's model name
+    tells a community build from the official one; uncensored models always say so.
+    """
     model = profile.model
-    return f"Ornith {model.version or ''} {model.size_class or ''} (local)".replace("  ", " ")
+    if model.repo and "/" in model.repo:
+        name = model.repo.split("/", 1)[1]
+        if name.lower().endswith("-gguf"):
+            name = name[: -len("-gguf")]
+    else:
+        name = f"Ornith {model.version or '?'} {model.size_class or '?'}"
+    if model.quant:
+        name += f" {model.quant}"
+    if model.uncensored:
+        name += " [UNCENSORED]"
+    return f"{name}, {context_label(profile.runtime.context)} context (local)"
 
 
 def wrapper_script(profile: Profile) -> str:
@@ -61,7 +78,7 @@ def wrapper_script(profile: Profile) -> str:
 # non-Claude models.
 URL='{profile.url}'
 MODEL='{profile.runtime.alias}'
-NAME='{display_name(profile)}'
+NAME={shlex.quote(display_name(profile))}
 START='ornith-launcher launch {profile.name}'
 PYTHON=$(command -v python3 || command -v python) || {{
     echo "Python 3 is needed to read the server's settings." >&2

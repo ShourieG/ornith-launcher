@@ -105,6 +105,9 @@ class FileGroupingTest(unittest.TestCase):
             "qwen35.rope.dimension_sections": (11, 11, 10, 0),
             "tokenizer.ggml.model": "gpt2",
             "qwen35.big": ArraySummary(ValueType.INT32, 1000),
+            "general.tags": ("gguf", "text-generation"),
+            "general.base_model.0.name": "Ornith 1.5 9B",
+            "general.base_model.0.license": "mit",
         }
         self.assertEqual(
             header_subset(values),
@@ -112,6 +115,8 @@ class FileGroupingTest(unittest.TestCase):
                 "general.architecture": "qwen35",
                 "general.name": "Ornith 1.5 9B",
                 "qwen35.rope.dimension_sections": [11, 11, 10, 0],
+                "general.tags": ["gguf", "text-generation"],
+                "general.base_model.0.name": "Ornith 1.5 9B",
             },
         )
 
@@ -138,7 +143,7 @@ class BuilderTest(unittest.TestCase):
                 ],
                 "base_model:quantized:ornith-ai/Ornith-1.5-35B-A3B": [
                     search_result(
-                        "someone/Tiel-Coder-GGUF",
+                        "someone/Finetune-Coder-GGUF",
                         tags=("base_model:quantized:ornith-ai/Ornith-1.5-35B-A3B",),
                     )
                 ],
@@ -149,11 +154,11 @@ class BuilderTest(unittest.TestCase):
                     tree_item("Ornith-1.5-9B-Q4_K_M.gguf", 5 * 2**30),
                     tree_item("mmproj-Ornith-1.5-9B-BF16.gguf", 2**29),
                 ],
-                "someone/Tiel-Coder-GGUF": [tree_item("tiel-Q4_K_M.gguf", 20 * 2**30)],
+                "someone/Finetune-Coder-GGUF": [tree_item("finetune-Q4_K_M.gguf", 20 * 2**30)],
             },
             headers={
                 "ornith-ai/Ornith-1.5-9B-GGUF": gguf_bytes(ornith_pairs("9B")),
-                "someone/Tiel-Coder-GGUF": gguf_bytes(ornith_pairs("35B")),
+                "someone/Finetune-Coder-GGUF": gguf_bytes(ornith_pairs("35B")),
             },
         )
 
@@ -161,7 +166,7 @@ class BuilderTest(unittest.TestCase):
         built = CatalogBuilder(self.hub, FAMILIES, clock=lambda: 123.0).build()
         self.assertEqual(
             sorted(built.repos),
-            ["gated/repo", "ornith-ai/Ornith-1.5-9B-GGUF", "someone/Tiel-Coder-GGUF"],
+            ["gated/repo", "ornith-ai/Ornith-1.5-9B-GGUF", "someone/Finetune-Coder-GGUF"],
         )
         self.assertEqual(built.fetched_at, 123.0)
         official = built.repos["ornith-ai/Ornith-1.5-9B-GGUF"]
@@ -169,8 +174,8 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(official.header_file, "Ornith-1.5-9B-Q4_K_M.gguf")  # smallest file
         self.assertEqual(official.header["qwen35.embedding_length"], 4096)
         self.assertEqual(official.best_mmproj().path, "mmproj-Ornith-1.5-9B-BF16.gguf")
-        tiel = built.repos["someone/Tiel-Coder-GGUF"]
-        self.assertEqual(tiel.base_models, ("ornith-ai/Ornith-1.5-35B-A3B",))
+        finetune = built.repos["someone/Finetune-Coder-GGUF"]
+        self.assertEqual(finetune.base_models, ("ornith-ai/Ornith-1.5-35B-A3B",))
         gated = built.repos["gated/repo"]
         self.assertTrue(gated.gated)
         self.assertIsNone(gated.header)
@@ -179,13 +184,27 @@ class BuilderTest(unittest.TestCase):
     def test_unchanged_repos_are_reused_and_failures_keep_old_data(self):
         first = CatalogBuilder(self.hub, FAMILIES).build()
         self.hub.tree_calls.clear()
-        self.hub.fail.add("someone/Tiel-Coder-GGUF")
+        self.hub.fail.add("someone/Finetune-Coder-GGUF")
         self.hub.searches["base_model:quantized:ornith-ai/Ornith-1.5-35B-A3B"][0]["sha"] = "s2"
         second = CatalogBuilder(self.hub, FAMILIES).build(first)
-        self.assertEqual(self.hub.tree_calls, ["someone/Tiel-Coder-GGUF"])
+        self.assertEqual(self.hub.tree_calls, ["someone/Finetune-Coder-GGUF"])
         self.assertEqual(
-            second.repos["someone/Tiel-Coder-GGUF"], first.repos["someone/Tiel-Coder-GGUF"]
+            second.repos["someone/Finetune-Coder-GGUF"], first.repos["someone/Finetune-Coder-GGUF"]
         )
+
+    def test_reused_repos_get_current_likes_and_downloads(self):
+        first = CatalogBuilder(self.hub, FAMILIES).build()
+        self.hub.tree_calls.clear()
+        for results in self.hub.searches.values():
+            for result in results:
+                result.update(likes=554, downloads=3860800)
+        second = CatalogBuilder(self.hub, FAMILIES).build(first)
+        self.assertEqual(self.hub.tree_calls, [])  # nothing read again
+        self.assertTrue(second.repos)
+        for repo in second.repos.values():
+            self.assertEqual((repo.likes, repo.downloads), (554, 3860800))
+        again = catalog_from_dict(json.loads(json.dumps(catalog_to_dict(second))), "cache")
+        self.assertEqual(again.repos, second.repos)
 
     def test_saves_progress_periodically(self):
         saved = []
@@ -238,7 +257,7 @@ class EntriesTest(unittest.TestCase):
         self.assertEqual(entry.arch.attention_layers, 10)
 
     def test_community_and_badges(self):
-        low = self.entries[("bartowski/Ornith-1.5-397B-GGUF", "Ornith-1.5-397B-IQ1_S.gguf")]
+        low = self.entries[("quant-uploader/Ornith-1.5-397B-GGUF", "Ornith-1.5-397B-IQ1_S.gguf")]
         self.assertEqual(low.classification.source, Source.COMMUNITY)
         self.assertTrue(low.classification.lineage_verified)
         self.assertIn(Badge.LOW_BIT, low.classification.badges)

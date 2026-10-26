@@ -162,6 +162,9 @@ class HubClient:
     def tree(self, repo_id: str, revision: str) -> list[dict[str, Any]]:
         return self.get_json(f"/api/models/{repo_id}/tree/{revision}", [("recursive", "true")])
 
+    def model_card_url(self, repo_id: str) -> str:
+        return f"{self.endpoint}/{repo_id}"
+
     def resolve_url(self, repo_id: str, revision: str, path: str) -> str:
         quoted = urllib.parse.quote(path)
         return f"{self.endpoint}/{repo_id}/resolve/{revision}/{quoted}"

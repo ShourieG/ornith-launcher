@@ -80,7 +80,9 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(found.sha256_hint, "cd" * 32)
 
     def test_lm_studio_and_common_folders(self):
-        fake_model(self.home / ".lmstudio/models/bartowski/Ornith-1.5-9B-GGUF/o-Q8_0.gguf", "9B")
+        fake_model(
+            self.home / ".lmstudio/models/quant-uploader/Ornith-1.5-9B-GGUF/o-Q8_0.gguf", "9B"
+        )
         fake_model(self.home / "models/ornith/Ornith-1.0-35B-Q4_K_M.gguf")
         (self.home / "models/small.gguf").write_bytes(b"GGUF" + b"\0" * 100)  # too small
         notgguf = self.home / "models/fake.gguf"
@@ -92,7 +94,7 @@ class SearchTest(unittest.TestCase):
         names = sorted(f.path.name for f in files)
         self.assertEqual(names, ["Ornith-1.0-35B-Q4_K_M.gguf", "o-Q8_0.gguf"])
         studio = next(f for f in files if f.owner_app == "lmstudio")
-        self.assertEqual(studio.repo_hint, "bartowski/Ornith-1.5-9B-GGUF")
+        self.assertEqual(studio.repo_hint, "quant-uploader/Ornith-1.5-9B-GGUF")
 
     def test_split_models_need_every_part(self):
         folder = self.home / "models" / "big"

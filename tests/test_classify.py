@@ -66,7 +66,7 @@ class VersionAndSizeTest(unittest.TestCase):
     def test_lineage_beats_names(self):
         evidence = FileEvidence(
             "Ornith-1.5-35B-Q4_K_M.gguf",  # misleading file name
-            "someone/Tiel-Coder-35B-GGUF",
+            "someone/Finetune-Coder-35B-GGUF",
             base_models=("deepreinforce-ai/Ornith-1.0-35B",),
         )
         result = run("35B", evidence)
@@ -77,7 +77,8 @@ class VersionAndSizeTest(unittest.TestCase):
 
     def test_repo_name_then_file_name(self):
         by_repo = run(
-            "397B", FileEvidence("x-IQ1_S.gguf", "bartowski/deepreinforce-ai_Ornith-1.0-397B-GGUF")
+            "397B",
+            FileEvidence("x-IQ1_S.gguf", "quant-uploader/deepreinforce-ai_Ornith-1.0-397B-GGUF"),
         )
         self.assertEqual(by_repo.version, "1.0")
         self.assertEqual(by_repo.version_source, VersionSource.REPO_NAME)
@@ -89,7 +90,7 @@ class VersionAndSizeTest(unittest.TestCase):
 
     def test_no_version_signal_gives_version_unknown(self):
         result = run(
-            "9B", FileEvidence("Ornith-9B-CORTEX-Q4_K_M.gguf", "Johnny5b/Ornith-9B-CORTEX-GGUF")
+            "9B", FileEvidence("Ornith-9B-Blend-Q4_K_M.gguf", "merge-uploader/Ornith-9B-Blend-GGUF")
         )
         self.assertTrue(result.supported)
         self.assertIsNone(result.family)
@@ -124,7 +125,8 @@ class ExclusionTest(unittest.TestCase):
 class BadgesTest(unittest.TestCase):
     def test_397b_is_untested_locally_and_badges_stack(self):
         evidence = FileEvidence(
-            "Ornith-1.5-397B-uncensored-IQ1_S.gguf", "Lethevimlet/Ornith-1.5-397B-uncensored-GGUF"
+            "Ornith-1.5-397B-uncensored-IQ1_S.gguf",
+            "lowbit-uploader/Ornith-1.5-397B-uncensored-GGUF",
         )
         result = run("397B", evidence)
         self.assertEqual(result.badges, (Badge.UNTESTED_LOCALLY, Badge.LOW_BIT, Badge.UNCENSORED))
@@ -134,6 +136,40 @@ class BadgesTest(unittest.TestCase):
         by_header = run("9B", FileEvidence("model.gguf"), name="Ornith 1.5 9B Heretic")
         self.assertTrue(by_tag.uncensored)
         self.assertTrue(by_header.uncensored)
+
+    def test_other_spellings_are_uncensored(self):
+        for name in ("Ornith-1.5-9B-OBLITERATED", "Ornith-1.0-35B-abliterix", "Ornith-1.5-9B-NSFW"):
+            result = run("9B", FileEvidence(f"{name}-Q8_0.gguf", f"example-org/{name}-GGUF"))
+            self.assertTrue(result.uncensored, name)
+
+    def test_uncensored_from_the_models_it_was_made_from(self):
+        # A quant whose own name hides it, made from an abliterated model.
+        quant = FileEvidence(
+            "m-Q4_K_M.gguf",
+            "quant-uploader/Ornith-1.5-9B-Tuned-GGUF",
+            base_models=("uncensored-uploader/Ornith-1.5-9B-abliterated",),
+        )
+        self.assertTrue(run("9B", quant).uncensored)
+        # A file found on disk: only its header says so.
+        values = dict(metadata("9B"))
+        local = FileEvidence("model.gguf")
+        for key, value in (
+            ("general.tags", ("gguf", "uncensored")),
+            ("general.finetune", "heretic"),
+            ("general.base_model.0.repo_url", "https://huggingface.co/x/Ornith-9B-abliterated"),
+        ):
+            result = classify({**values, key: value}, local, FAMILIES, RULES)
+            self.assertTrue(result.uncensored, key)
+        plain = {**values, "general.tags": ("gguf",), "general.base_model.0.name": "Ornith 1.5 9B"}
+        self.assertFalse(classify(plain, local, FAMILIES, RULES).uncensored)
+
+    def test_every_uncensored_keyword_marks_a_file(self):
+        for keyword in RULES.uncensored_keywords:
+            name = f"Ornith-1.5-9B-{keyword.upper()}-Q8_0.gguf"
+            result = run("9B", FileEvidence(name, "example-org/Ornith-1.5-9B-GGUF"))
+            self.assertTrue(result.uncensored, keyword)
+        plain = run("9B", FileEvidence("Ornith-1.5-9B-Q8_0.gguf", "example-org/Ornith-1.5-9B-GGUF"))
+        self.assertFalse(plain.uncensored)
 
     def test_official_35b_has_no_badges(self):
         result = run(

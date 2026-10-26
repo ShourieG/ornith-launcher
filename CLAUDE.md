@@ -62,6 +62,7 @@ Run the unit tests and ruff before every commit.
 - Integration tests live in `tests/integration/` and skip unless `ORNITH_IT=1` is set.
 - `tests/__init__.py` puts `src/` on the import path, which is why the commands pass `-t .`.
 - New behaviour needs a test, and a bug fix needs a test that fails without the fix.
+- Use made-up uploader and repository names in tests (for example `quant-uploader/`), never real accounts.
 
 ## Commits and pull requests
 

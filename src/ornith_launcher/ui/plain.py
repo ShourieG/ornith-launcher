@@ -11,6 +11,22 @@ def gib(value: int | float) -> str:
     return f"{value / GIB:.1f} GiB"
 
 
+def key_values(rows: Sequence[tuple[str, str]], indent: str = "  ") -> list[str]:
+    """Aligned "Label:  value" lines, e.g. a summary."""
+    width = max(len(label) for label, _ in rows) + 1
+    return [f"{indent}{(label + ':').ljust(width)}  {value}" for label, value in rows]
+
+
+def compact_count(value: int) -> str:
+    """554 -> "554", 12345 -> "12.3k", 3860800 -> "3.9M"."""
+    for limit, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        # 999,960 rounds up to "1M", not "1000k".
+        if value >= limit or (value >= 1000 and round(value / limit, 1) >= 1):
+            text = f"{value / limit:.1f}".removesuffix(".0")
+            return f"{text}{suffix}"
+    return str(value)
+
+
 # How model cards and users name the context sizes on offer.
 _CONTEXT_LABELS = {65536: "64k", 131072: "128k", 262144: "262k", 524288: "524k", 1048576: "1M"}
 

@@ -260,6 +260,22 @@ class DockerTest(unittest.TestCase):
         self.assertTrue(status.snap and status.selinux and status.rootless)
 
 
+class LocalHostStreamTest(unittest.TestCase):
+    def test_a_command_s_output_arrives_line_by_line_and_closing_ends_it(self):
+        import sys
+
+        from ornith_launcher.system.host import LocalHost
+
+        host = LocalHost()
+        script = "import sys, time; print('one'); print('two', file=sys.stderr); sys.stdout.flush()"
+        stream = host.stream([sys.executable, "-c", script + "; time.sleep(30)"])
+        lines = stream.lines()
+        self.assertEqual(sorted([next(lines), next(lines)]), ["one", "two"])  # stderr too
+        stream.close()  # does not wait the 30 s
+        self.assertIsNotNone(stream.process.poll())
+        self.assertIsNone(host.stream(["/no/such/program"]))
+
+
 class ReportTest(unittest.TestCase):
     def test_spark_has_no_blocking_problems(self):
         report = check_system(spark_host(), load_pins(), system="Linux", machine="aarch64")

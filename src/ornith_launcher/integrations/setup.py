@@ -31,16 +31,17 @@ CHOICES = (
 def choose(app: App, prompter: PlainPrompter) -> str:
     claude = find(CLAUDE_CODE, app.host, app.home)
     code = find(OPENCODE, app.host, app.home)
-    app.say()
+    prompter.section("Coding tools")
     app.say(
-        f"Claude Code: {'installed' if claude else 'not installed'}. "
+        f"  Claude Code: {'installed' if claude else 'not installed'}. "
         f"OpenCode: {'installed' if code else 'not installed'}."
     )
-    app.say(
+    prompter.paragraph(
         "Claude Code needs a small chat-template fix for this model; the fix is applied to a "
-        "copy, the model file is not changed."
+        "copy, the model file is not changed.",
+        indent="  ",
     )
-    app.say(f"Note: {claude_code.ANTHROPIC_NOTICE}")
+    prompter.paragraph(f"Note: {claude_code.ANTHROPIC_NOTICE}", indent="  ")
     picked = prompter.choose(
         "Connect the model to a coding tool?",
         ["Option", ""],
@@ -98,10 +99,10 @@ def _set_up_claude(app: App, profile: Profile, is_default: bool) -> None:
                 source="patched", rule=verdict.rule.id, sha256=verdict.sha256, file=str(target)
             )
             note = "" if verdict.tested else " (this template version is untested)"
-            app.say(f"Applied the chat-template fix {verdict.rule.id}{note}.")
+            app.say(f"  Applied the chat-template fix {verdict.rule.id}{note}.")
         else:
             app.say(
-                "No known fix applies to this model's chat template; it is checked when the "
+                "  No known fix applies to this model's chat template; it is checked when the "
                 "server first starts."
             )
     wrapper = claude_code.write_wrapper(app.home, profile)
@@ -111,9 +112,9 @@ def _set_up_claude(app: App, profile: Profile, is_default: bool) -> None:
     if alias is not None:
         record["alias"] = str(alias)
     profile.integrations["claude_code"] = record
-    app.say(f"Created {wrapper}. Run it to use Claude Code with this model.")
+    app.say(f"  Created {wrapper}. Run it to use Claude Code with this model.")
     if not claude_code.on_path(wrapper.parent, app.env):
-        app.say(f"  {wrapper.parent} is not on your PATH; run it by its full path, or add it.")
+        app.say(f"    {wrapper.parent} is not on your PATH; run it by its full path, or add it.")
 
 
 def _drop_claude(app: App, profile: Profile) -> None:
@@ -137,7 +138,7 @@ def _set_up_opencode(app: App, prompter: PlainPrompter, profile: Profile) -> Non
         try:
             config = json.loads(text)
         except ValueError:
-            app.say(f"{path} is not valid JSON, so it is left alone.")
+            app.say(f"  {path} is not valid JSON, so it is left alone.")
             app.say(opencode.snippet(profile, opencode.PROVIDER, display))
             return
     provider_id = opencode.provider_id_for(config, profile)
@@ -147,7 +148,8 @@ def _set_up_opencode(app: App, prompter: PlainPrompter, profile: Profile) -> Non
     opencode.write(path, opencode.merged(config, profile, provider_id, display))
     profile.integrations["opencode"] = record
     app.say(
-        f"Added {profile.runtime.alias} to {path}. In OpenCode: /models -> {opencode.PROVIDER_NAME}"
+        f"  Added {profile.runtime.alias} to {path}. "
+        f"In OpenCode: /models -> {opencode.PROVIDER_NAME}"
     )
 
 

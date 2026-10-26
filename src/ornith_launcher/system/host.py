@@ -9,8 +9,9 @@ from __future__ import annotations
 import glob as _glob
 import os
 import shutil
+import signal
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -53,6 +54,42 @@ class Host(Protocol):
 
     def spawn(self, argv: Sequence[str]) -> bool:
         """Start a detached process (e.g. a terminal window); False if it could not start."""
+
+    def process_command(self, pid: int) -> str | None:
+        """The command line of a running process, or None if there is no such process."""
+
+    def terminate(self, pid: int) -> None:
+        """Ask a process to end (SIGTERM); nothing happens if it is already gone."""
+
+    def stream(self, argv: Sequence[str]) -> LineStream | None:
+        """A running command's output, line by line; None if it is not installed."""
+
+
+class LineStream(Protocol):
+    def lines(self) -> Iterator[str]:
+        """Output lines (without the line end) until the command ends or is closed."""
+
+    def close(self) -> None: ...
+
+
+class _ProcessLines:
+    def __init__(self, process: subprocess.Popen) -> None:
+        self.process = process
+
+    def lines(self) -> Iterator[str]:
+        assert self.process.stdout is not None
+        for line in self.process.stdout:
+            yield line.rstrip("\r\n")
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+        if self.process.stdout is not None:
+            self.process.stdout.close()
 
 
 class LocalHost:
@@ -124,3 +161,38 @@ class LocalHost:
         except (FileNotFoundError, PermissionError):
             return False
         return True
+
+    def process_command(self, pid: int) -> str | None:
+        try:
+            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except OSError:
+            if os.name == "nt" or Path("/proc/self").exists():
+                return None  # no such process (Linux), or not supported yet (Windows)
+            result = self.run(["ps", "-o", "command=", "-p", str(pid)])  # macOS
+            if result is None or not result.ok:
+                return None
+            return result.stdout.strip() or None
+        return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip() or None
+
+    def terminate(self, pid: int) -> None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    def stream(self, argv: Sequence[str]) -> LineStream | None:
+        # Same process group, so closing the window (SIGHUP) or Ctrl+C ends the command too.
+        try:
+            process = subprocess.Popen(
+                list(argv),
+                env=self._env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                bufsize=1,
+            )
+        except (FileNotFoundError, PermissionError):
+            return None
+        return _ProcessLines(process)

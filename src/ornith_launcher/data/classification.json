@@ -1,5 +1,8 @@
 {
   "schema_version": 1,
-  "uncensored_keywords": ["uncensored", "abliterat", "heretic", "crack", "dealign", "refusal"],
+  "uncensored_keywords": [
+    "uncensored", "decensor", "ablit", "obliterat", "heretic", "crack", "dealign", "refusal",
+    "unaligned", "unfiltered", "jailbr", "nsfw", "amoral"
+  ],
   "low_bit_prefixes": ["IQ1", "IQ2", "Q1_", "Q2_", "TQ1", "TQ2"]
 }

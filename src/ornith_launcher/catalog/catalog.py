@@ -50,7 +50,10 @@ _HEADER_GENERAL_KEYS = (
     "general.basename",
     "general.file_type",
     "general.size_label",
+    "general.finetune",
+    "general.tags",
 )
+_HEADER_BASE_MODEL = re.compile(r"general\.base_model\.\d+\.(name|repo_url)")
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,7 @@ class Repo:
     header: Mapping[str, Any] | None  # architecture keys of one model file; None if unreadable
     header_file: str | None = None  # the file the header was read from
     header_error: str | None = None
+    likes: int = 0
 
     @property
     def owner(self) -> str:
@@ -148,6 +152,7 @@ def repo_to_dict(repo: Repo) -> dict[str, Any]:
         "base_models": list(repo.base_models),
         "tags": list(repo.tags),
         "downloads": repo.downloads,
+        "likes": repo.likes,
         "files": [[_part_to_list(p) for p in f.parts] for f in repo.files],
         "mmproj": [_part_to_list(p) for p in repo.mmproj],
         "header": dict(repo.header) if repo.header is not None else None,
@@ -166,6 +171,7 @@ def repo_from_dict(raw: Mapping[str, Any]) -> Repo:
         base_models=tuple(raw.get("base_models", ())),
         tags=tuple(raw.get("tags", ())),
         downloads=int(raw.get("downloads") or 0),
+        likes=int(raw.get("likes") or 0),
         files=tuple(ModelFile(tuple(_part_from_list(p) for p in f)) for f in raw["files"]),
         mmproj=tuple(_part_from_list(p) for p in raw.get("mmproj", ())),
         header=raw.get("header"),
@@ -359,12 +365,13 @@ def group_files(siblings: Iterable[Mapping[str, Any]]) -> tuple[list[ModelFile],
 
 
 def header_subset(values: Mapping[str, Any]) -> dict[str, Any]:
-    """The header keys the launcher uses: architecture numbers, the model name and file type."""
+    """The header keys the launcher uses: architecture numbers, names, file type and lineage."""
     arch = values.get("general.architecture")
     kept: dict[str, Any] = {}
     for key, value in values.items():
         ours = isinstance(arch, str) and key.startswith(f"{arch}.")
-        if not (ours or key in _HEADER_GENERAL_KEYS) or isinstance(value, ArraySummary):
+        general = key in _HEADER_GENERAL_KEYS or _HEADER_BASE_MODEL.fullmatch(key)
+        if not (ours or general) or isinstance(value, ArraySummary):
             continue
         if isinstance(value, str):
             if len(value) > _MAX_HEADER_STRING:
@@ -418,7 +425,12 @@ class CatalogBuilder:
             self._progress.done = index - 1
             known = old.get(repo_id)
             if known is not None and known.sha == model.get("sha") and known.header is not None:
-                repos[repo_id] = known
+                # The listing already carries the counts, so they stay current at no cost.
+                repos[repo_id] = replace(
+                    known,
+                    downloads=int(model.get("downloads") or 0),
+                    likes=int(model.get("likes") or 0),
+                )
                 continue
             self._report(f"Reading {repo_id}")
             try:
@@ -465,6 +477,7 @@ class CatalogBuilder:
             base_models=_base_models(tags),
             tags=tuple(t for t in tags if not t.startswith(("base_model:", "region:"))),
             downloads=int(model.get("downloads") or 0),
+            likes=int(model.get("likes") or 0),
             files=tuple(files),
             mmproj=tuple(mmproj),
             header=header,

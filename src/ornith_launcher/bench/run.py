@@ -113,7 +113,7 @@ def run_bench(
         return thermal.temperature if thermal else None
 
     if args.needle:
-        if runtime.http.get(f"{profile.url}/health").status != 200:
+        if runtime.http.get(f"{runtime.api_url(profile)}/health").status != 200:
             raise BenchError(
                 f"{profile.name} is not running",
                 hint=f"Start it first: ornith-launcher launch {profile.name} --no-monitor",
@@ -129,7 +129,7 @@ def run_bench(
         paragraphs = corpus.haystack.read_text(encoding="utf-8").split("\n\n")
 
         def post(path: str, body: dict) -> dict:
-            reply = runtime.http.post_json(f"{profile.url}{path}", body, timeout=7200)
+            reply = runtime.http.post_json(f"{runtime.api_url(profile)}{path}", body, timeout=7200)
             if reply.status != 200:
                 raise BenchError(f"HTTP {reply.status}: {reply.text[:200]}")
             return reply.json() or {}

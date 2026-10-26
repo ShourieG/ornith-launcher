@@ -64,6 +64,9 @@ class Placement(str, enum.Enum):
     MULTI_GPU = "multi-gpu"  # layers split across several GPUs
 
 
+THIRD_PARTY_NOTE = "third-party build, not from Ornith AI"
+
+
 @dataclass(frozen=True)
 class TestedResults:
     machines: Mapping[str, str]
@@ -176,7 +179,7 @@ class Candidate:
         if self.yarn_factor and family is not None and family.yarn == "undocumented":
             notes.append(f"YaRN is not documented for Ornith {family.version}")
         if self.entry.classification.source is Source.COMMUNITY:
-            notes.append("third-party build, not from Ornith AI")
+            notes.append(THIRD_PARTY_NOTE)
         return tuple(notes)
 
 
@@ -371,6 +374,7 @@ class Filters:
     sources: frozenset[str] = frozenset()
     quants: frozenset[str] = frozenset()
     show_uncensored: bool = False
+    only_uncensored: bool = False  # implies show_uncensored
     show_untested_kv: bool = False
     show_low_bit: bool = True
     only_fitting: bool = False
@@ -386,7 +390,9 @@ class Filters:
             return False
         if self.quants and (cls.quant or "").upper() not in self.quants:
             return False
-        if cls.uncensored and not self.show_uncensored:
+        if cls.uncensored and not (self.show_uncensored or self.only_uncensored):
+            return False
+        if self.only_uncensored and not cls.uncensored:
             return False
         if c.kv_type != "f16" and not self.show_untested_kv:
             return False

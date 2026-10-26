@@ -17,6 +17,27 @@ runs them; reports are welcome.
 | Windows | Native llama.cpp, no Docker | Planned |
 | macOS (Apple Silicon) | Native llama.cpp with Metal, no Docker | Planned |
 
+## Linux distributions
+
+The launcher calls no package manager and has little distribution-specific code, so any distribution with
+Python 3.9+ and Docker Engine should work. Only one has been run.
+
+| Distribution | Status |
+|---|---|
+| Ubuntu 24.04 (DGX OS on the DGX Spark, arm64, GNOME) | Tested |
+| Other Ubuntu and Debian releases with Python 3.9+ (Ubuntu 22.04+, Debian 11+) | Expected to work, untested |
+| Fedora, RHEL 9 and its rebuilds (Rocky, Alma) | Expected to work, untested. SELinux is detected and the container runs with `label=disable` |
+| Arch, openSUSE and others | Expected to work, untested |
+| Ubuntu 20.04, RHEL 8 | `python3` is too old (3.8 and 3.6). Works once a newer Python is installed alongside (`python3.9`), untested |
+| WSL2, Podman, rootless Docker, immutable distributions (Fedora Silverblue) | Untested |
+
+- Docker installed as an Ubuntu snap can only read files under your home folder; the launcher warns about it.
+- Desktop icons follow the freedesktop standard. On GNOME the launcher marks its own icon as trusted, so it starts
+  with one click; other desktops may ask "Allow Launching" once. Without a desktop (a server, or over SSH) there
+  is no icon, and the server runs in the current terminal.
+- Terminals the launcher can open for the server window: GNOME Terminal, GNOME Console, Ptyxis, Konsole, kitty,
+  Alacritty, WezTerm, foot, Xfce Terminal, Tilix, Terminator, MATE Terminal, LXTerminal and xterm.
+
 ## Models
 
 Only the Ornith 1.5 35B-A3B has been run. Plans for every other model and size are ESTIMATED from the GGUF

@@ -5,6 +5,10 @@ the profile name and a hash of its arguments, so a later launch can tell
 "already running as configured" (reuse it) from "running with other settings"
 (refuse, and say how to stop it). The server is published on 127.0.0.1 only,
 because the llama.cpp API has no authentication.
+
+With the chat log on (``proxied``), the server is published on a free port Docker
+picks, and the chat log proxy takes the profile's port. The launcher's own checks
+(health, warm-up, metrics) always go straight to the server, on ``api_url``.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from ornith_launcher.runtime.server import (
     fit_params_args,
     server_args,
 )
-from ornith_launcher.system.host import Host
+from ornith_launcher.system.host import Host, LineStream
 
 PREFIX = "ornith-launcher-"
 PROFILE_LABEL = "org.ornith-launcher.profile"
@@ -64,6 +68,16 @@ class FitCheck:
     @property
     def total_mib(self) -> int:
         return sum(sum(values) for values in self.devices.values())
+
+
+def digest_reference(reference: str) -> str:
+    """ "repo:tag@sha256:..." -> "repo@sha256:...", the name Docker stored for a pinned pull."""
+    name, at, digest = reference.partition("@")
+    if not at:
+        return reference
+    last = name.rsplit("/", 1)[-1]
+    repository = name.rsplit(":", 1)[0] if ":" in last else name
+    return f"{repository}@{digest}"
 
 
 def container_name(profile_name: str) -> str:
@@ -122,13 +136,17 @@ def _security_args(profile: Profile) -> list[str]:
     return ["--security-opt", "label=disable"] if profile.runtime.selinux else []
 
 
-def run_args(profile: Profile) -> list[str]:
-    """The full ``docker run`` command for a profile (design 10.3)."""
+def run_args(profile: Profile, proxied: bool = False) -> list[str]:
+    """The full ``docker run`` command for a profile (design 10.3).
+
+    ``proxied``: publish on a port Docker picks, for the chat log proxy to forward to.
+    """
+    host_port = "" if proxied else str(profile.runtime.port)
     body = (
         ["--restart", "on-failure:3"]
         + list(profile.runtime.device_args)
         + _security_args(profile)
-        + ["-p", f"127.0.0.1:{profile.runtime.port}:{CONTAINER_PORT}"]
+        + ["-p", f"127.0.0.1:{host_port}:{CONTAINER_PORT}"]
         + _volume_args(profile)
         + [profile.runtime.image]
         + server_args(server_config(profile))
@@ -174,6 +192,7 @@ class DockerRuntime:
     http: Http = field(default_factory=UrllibHttp)
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
+    _ports: dict[str, int] = field(default_factory=dict)  # container -> port on 127.0.0.1
 
     # Images -----------------------------------------------------------------------------
 
@@ -187,6 +206,19 @@ class DockerRuntime:
                 f"docker could not pull {reference}",
                 hint=f"Check your internet connection, then run: docker pull {reference}",
             )
+
+    def remove_image(self, reference: str) -> tuple[str, str]:
+        """Remove only the reference this launcher pulled, never the image's other tags.
+
+        Returns ("deleted", ""), ("kept", "") when other tags still use the image, or
+        ("failed", reason), for example while a container still uses it.
+        """
+        result = self.host.run(["docker", "image", "rm", digest_reference(reference)], timeout=120)
+        if result is None:
+            return "failed", "docker is not available"
+        if not result.ok:
+            return "failed", (result.stderr.strip().splitlines() or ["unknown error"])[0]
+        return ("deleted" if "Deleted:" in result.stdout else "kept"), ""
 
     # Containers -------------------------------------------------------------------------
 
@@ -230,20 +262,26 @@ class DockerRuntime:
                 found.append(f"{name} ({image})")
         return found
 
-    def start(self, profile: Profile) -> str:
+    def start(self, profile: Profile, proxied: bool = False) -> str:
         """Start the profile's server; "reused" if it already runs with the same settings."""
-        argv = run_args(profile)
+        argv = run_args(profile, proxied)
         name = container_name(profile.name)
         current = self.inspect(name)
         if current.alive:
             if current.labels.get(ARGS_LABEL) == args_hash(argv):
                 return "reused"
             raise ServerError(
-                f"{name} is already running with different settings",
+                f"{name} is already running with different settings"
+                + (
+                    " (the chat log is on for one and off for the other)"
+                    if self._only_chat_log_differs(profile, current, proxied)
+                    else ""
+                ),
                 hint=f"Stop it first: ornith-launcher stop {profile.name}",
             )
         if current.state != "missing":
             self.remove(name)  # a stopped container from an earlier run
+        self._ports.pop(name, None)
         result = self.host.run(argv, timeout=120)
         if result is None or not result.ok:
             error = (result.stderr.strip() if result else "") or "docker run did not start"
@@ -261,14 +299,54 @@ class DockerRuntime:
 
     def remove(self, name: str) -> bool:
         """Stop and delete a container; its memory is released at once."""
+        self._ports.pop(name, None)
         result = self.host.run(["docker", "rm", "-f", name], timeout=60)
         return result is not None and result.ok
+
+    def _only_chat_log_differs(self, profile: Profile, current: Container, proxied: bool) -> bool:
+        other = args_hash(run_args(profile, not proxied))
+        return current.labels.get(ARGS_LABEL) == other
+
+    def host_port(self, profile: Profile, cached: bool = True) -> int | None:
+        """The port on 127.0.0.1 where the server itself listens, or None if not running.
+
+        ``cached=False`` asks Docker again, e.g. after the container restarted.
+        """
+        name = container_name(profile.name)
+        if cached and name in self._ports:
+            return self._ports[name]
+        result = self.host.run(["docker", "port", name, f"{CONTAINER_PORT}/tcp"], timeout=30)
+        if result is None or not result.ok:
+            return None
+        for line in result.stdout.splitlines():
+            host, _, port = line.strip().rpartition(":")
+            if host == "127.0.0.1" and port.isdigit():
+                self._ports[name] = int(port)
+                return int(port)
+        return None
+
+    def api_url(self, profile: Profile) -> str:
+        """The server's own URL: the profile's, unless the chat log proxy sits in front."""
+        port = self.host_port(profile)
+        return f"http://127.0.0.1:{port}" if port else profile.url
 
     def logs(self, name: str, tail: int = 30) -> str:
         result = self.host.run(["docker", "logs", "--tail", str(tail), name], timeout=30)
         if result is None:
             return ""
         return (result.stdout + result.stderr).strip()
+
+    def follow_logs(self, profile: Profile, tail: int) -> int:
+        """Show the last ``tail`` log lines, then new ones until the server stops."""
+        return self.host.run_live(
+            ["docker", "logs", "--follow", "--tail", str(tail), container_name(profile.name)]
+        )
+
+    def log_stream(self, profile: Profile) -> LineStream | None:
+        """New log lines from now on, for the server window; None if docker is missing."""
+        return self.host.stream(
+            ["docker", "logs", "--follow", "--tail", "0", container_name(profile.name)]
+        )
 
     # Server -----------------------------------------------------------------------------
 
@@ -283,7 +361,7 @@ class DockerRuntime:
         started = self.clock()
         last = ""
         while True:
-            if self.http.get(f"{profile.url}/health").status == 200:
+            if self.http.get(f"{self.api_url(profile)}/health").status == 200:
                 return self.clock() - started
             container = self.inspect(name)
             if not container.alive:
@@ -306,7 +384,7 @@ class DockerRuntime:
     def warm_up(self, profile: Profile) -> float:
         started = self.clock()
         reply = self.http.post_json(
-            f"{profile.url}/v1/chat/completions",
+            f"{self.api_url(profile)}/v1/chat/completions",
             {
                 "model": profile.runtime.alias,
                 "max_tokens": 16,
@@ -323,18 +401,19 @@ class DockerRuntime:
     def verify(self, profile: Profile) -> list[str]:
         """Differences between what runs and what the profile asked for (empty when all match)."""
         problems = []
-        props = self.http.get(f"{profile.url}/props").json() or {}
+        url = self.api_url(profile)
+        props = self.http.get(f"{url}/props").json() or {}
         n_ctx = (props.get("default_generation_settings") or {}).get("n_ctx")
         if n_ctx is not None and n_ctx != profile.runtime.context:
             problems.append(f"context is {n_ctx}, expected {profile.runtime.context}")
-        models = self.http.get(f"{profile.url}/v1/models").json() or {}
+        models = self.http.get(f"{url}/v1/models").json() or {}
         ids = [m.get("id") for m in models.get("data") or []]
         if ids and profile.runtime.alias not in ids:
             problems.append(f"model name is {ids[0]}, expected {profile.runtime.alias}")
         return problems
 
     def requests_in_progress(self, profile: Profile) -> int | None:
-        reply = self.http.get(f"{profile.url}/metrics", timeout=2)
+        reply = self.http.get(f"{self.api_url(profile)}/metrics", timeout=2)
         if reply.status != 200:
             return None
         for line in reply.text.splitlines():

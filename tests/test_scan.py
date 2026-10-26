@@ -66,11 +66,11 @@ class ScanCommandTest(unittest.TestCase):
         self.assertIn("more. Show more with --limit", listing)
 
     def test_uncensored_needs_the_flag_and_warns(self):
-        _, out = self.run_cli("--full", "--search", "crack")
+        _, out = self.run_cli("--full", "--search", "uncensored")
         self.assertIn("All combinations (0,", out)
         self.app.out = io.StringIO()
-        _, out = self.run_cli("--full", "--search", "crack", "--uncensored")
-        self.assertIn("CRACK-Q8_0", out)
+        _, out = self.run_cli("--full", "--search", "uncensored", "--uncensored")
+        self.assertIn("uncensored-Q8_0", out)
         self.assertIn("You alone are responsible", self.app.err.getvalue())
 
     def test_empty_catalog_says_how_to_fill_it(self):

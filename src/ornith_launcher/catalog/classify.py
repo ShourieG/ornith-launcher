@@ -31,6 +31,11 @@ _VERSION_IN_NAME = re.compile(r"ornith[\s._-]*v?(\d+)[._-](\d+)(?!\d)", re.IGNOR
 
 # Header keys that name the model, most specific first.
 _HEADER_NAME_KEYS = ("general.basename", "general.name")
+# Header keys that say what a file was made from, for the uncensored check:
+# llama.cpp's converter copies them from the model card, so files found on disk
+# without a repo still carry them.
+_HEADER_LINEAGE_KEYS = ("general.finetune", "general.tags")
+_HEADER_BASE_MODEL = re.compile(r"general\.base_model\.\d+\.(name|repo_url)")
 
 
 class Source(str, enum.Enum):
@@ -255,10 +260,10 @@ def _source(repo_id: str | None, families: Families) -> Source:
 def _is_uncensored(
     evidence: FileEvidence, metadata: Mapping[str, Any], keywords: Iterable[str]
 ) -> bool:
-    texts = [evidence.file_name, evidence.repo_id or "", *evidence.tags]
-    for key in _HEADER_NAME_KEYS:
-        value = metadata.get(key)
-        if isinstance(value, str):
-            texts.append(value)
+    texts = [evidence.file_name, evidence.repo_id or "", *evidence.tags, *evidence.base_models]
+    for key, value in metadata.items():
+        if key in _HEADER_NAME_KEYS + _HEADER_LINEAGE_KEYS or _HEADER_BASE_MODEL.fullmatch(key):
+            values = value if isinstance(value, (list, tuple)) else [value]
+            texts += [v for v in values if isinstance(v, str)]
     haystack = " ".join(texts).lower()
     return any(keyword in haystack for keyword in keywords)

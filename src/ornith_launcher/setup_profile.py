@@ -1,4 +1,4 @@
-"""The last setup steps: runtime image, fit check, terminal, shortcut, profile, launch.
+"""The last setup steps: runtime image, fit check, terminal, chat log, shortcut, profile, launch.
 
 The wizard decides what to run; this module turns that into a saved profile
 that ``launch`` can start without asking anything again.
@@ -9,10 +9,19 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-from ornith_launcher import __version__
+from ornith_launcher import __version__, chat_log
 from ornith_launcher.app import App, self_command
+from ornith_launcher.installed import record
+from ornith_launcher.integrations import opencode
 from ornith_launcher.integrations import setup as integrations
-from ornith_launcher.integrations.shortcuts import desktop_entry, shortcut_path, write_shortcut
+from ornith_launcher.integrations.shortcuts import (
+    desktop_dir,
+    desktop_entry,
+    shortcut_name,
+    shortcut_path,
+    user_dirs_file,
+    write_shortcut,
+)
 from ornith_launcher.integrations.terminals import THIS_TERMINAL, detect_terminals
 from ornith_launcher.launch import Launcher, _hop_to_terminal, make_runtime
 from ornith_launcher.planner.memory_model import GIB
@@ -33,7 +42,8 @@ from ornith_launcher.scan import Plan
 from ornith_launcher.settings import Settings, save_settings
 from ornith_launcher.system.memory import PoolKind
 from ornith_launcher.templates.compat import read_template, template_sha256
-from ornith_launcher.ui.prompts import Choice, PlainPrompter
+from ornith_launcher.ui.prompts import Cancelled, Choice, PlainPrompter
+from ornith_launcher.uninstall import remove_created
 from ornith_launcher.wizard import Selection, SetupError
 
 DEFAULT_CACHE_RAM_MIB = 4096
@@ -122,12 +132,15 @@ def _source(selection: Selection) -> str:
 def ensure_image(app: App, runtime: DockerRuntime, reference: str) -> None:
     if runtime.image_present(reference):
         return
+    app.say()
     app.say(f"Downloading the llama.cpp image {reference.split('@')[0]}...")
     runtime.pull(reference)
+    record(app.paths, "images", reference)  # only an image this launcher pulled is ever removed
 
 
 def fit_check(app: App, runtime: DockerRuntime, profile: Profile, plan: Plan) -> None:
     """Ask llama.cpp itself how much memory the model needs, and compare with the budget."""
+    app.say()
     app.say("Checking the plan with llama.cpp's own memory estimate...")
     result = runtime.fit_check(profile)
     if result is None:
@@ -165,18 +178,64 @@ def choose_terminal(app: App, prompter: PlainPrompter, plan: Plan) -> dict[str, 
     return {"id": terminal.id, "argv": list(terminal.argv)}
 
 
+def offer_chat_log(app: App, prompter: PlainPrompter, plan: Plan, profile: Profile) -> None:
+    """A second window with requests and replies at every launch (default no); saved."""
+    if plan.report.platform.headless or chat_log.log_terminal(app, profile) is None:
+        return
+    app.say()
+    prompter.paragraph(
+        "A chat log window shows each request sent to this model and its reply as it "
+        "streams: what you or your coding tool sent, the model's thinking, its answer and "
+        "its tool calls. Nothing is saved to disk. The server's own log stays in the server "
+        "window. Ctrl+C or closing the chat log closes only that window, and it closes by "
+        "itself when the server stops."
+    )
+    if prompter.confirm("Also open a chat log window when this model starts?", default=False):
+        profile.terminal["chat_log"] = True
+
+
 def offer_shortcut(app: App, prompter: PlainPrompter, plan: Plan, profile: Profile) -> None:
+    """A launch icon on the desktop (default yes), then the applications menu (default no)."""
     if plan.report.platform.headless:
         return
-    path = shortcut_path(profile.name, app.env, app.home)
-    if not prompter.confirm(
-        f"Create a desktop shortcut ({path.name}) for one-click launches?", default=False
-    ):
-        return
     comment = f"Start Ornith ({profile.name}) with ornith-launcher (unofficial)"
-    write_shortcut(path, desktop_entry(profile.name, self_command(), comment))
-    profile.integrations["shortcut"] = str(path)
-    app.say(f"Created {path}. It appears in your applications menu.")
+    in_terminal = profile.terminal.get("id") == THIS_TERMINAL
+    entry = desktop_entry(
+        profile.name, self_command(), comment, in_terminal, chat_action=chat_log.enabled(profile)
+    )
+    desktop = desktop_dir(app.host.read_text(str(user_dirs_file(app.env, app.home))), app.home)
+    on_desktop = False
+    if desktop is not None and desktop.is_dir():
+        if prompter.confirm("Put a launch icon for this model on your desktop?", default=True):
+            path = desktop / shortcut_name(profile.name)
+            write_shortcut(path, entry)
+            record(app.paths, "shortcuts", str(path))
+            profile.integrations["desktop_copy"] = str(path)
+            on_desktop = True
+            app.say(f"  Created {path}.")
+            if not _trust_launcher(app, path):
+                app.say(
+                    '  If the icon says "Allow Launching", right-click it and choose that once.'
+                )
+    question = (
+        "Also add it to your applications menu?"
+        if on_desktop
+        else "Add a launcher for this model to your applications menu?"
+    )
+    if prompter.confirm(question, default=False):
+        path = shortcut_path(profile.name, app.env, app.home)
+        write_shortcut(path, entry)
+        record(app.paths, "shortcuts", str(path))
+        profile.integrations["shortcut"] = str(path)
+        app.say(f"  Created {path}. It appears in your applications menu.")
+
+
+def _trust_launcher(app: App, path: Path) -> bool:
+    """Mark our own desktop file as trusted, so GNOME launches it without asking first."""
+    if app.host.which("gio") is None:
+        return False
+    result = app.host.run(["gio", "set", str(path), "metadata::trusted", "true"])
+    return result is not None and result.ok
 
 
 def finish_setup(
@@ -203,23 +262,38 @@ def finish_setup(
     ensure_image(app, runtime, profile.runtime.image)
     fit_check(app, runtime, profile, plan)
     is_default = settings.default_profile is None or settings.default_profile not in existing
-    integrations.configure(app, prompter, profile, integrations.choose(app, prompter), is_default)
-    profile.terminal = choose_terminal(app, prompter, plan)
-    offer_shortcut(app, prompter, plan, profile)
+    choice = integrations.choose(app, prompter)
+    if choice != integrations.NONE:
+        app.say()  # the results of the choice, set off from the list
+    try:
+        integrations.configure(app, prompter, profile, choice, is_default)
+        profile.terminal = choose_terminal(app, prompter, plan)
+        offer_chat_log(app, prompter, plan, profile)
+        offer_shortcut(app, prompter, plan, profile)
+    except (Cancelled, KeyboardInterrupt):
+        # No profile is saved, so nothing would ever clean these up later.
+        record = profile.integrations.pop("opencode", None)
+        if record:
+            opencode.restore(record)
+            app.say(f"Put {record['config']} back as it was.")
+        remove_created(app, profile)
+        raise
     save_profile(app.paths, profile)
     if is_default:
         settings.default_profile = profile.name
         save_settings(app.paths, settings)
-    app.say(f"Saved the profile {profile.name}.")
+    app.say()
+    app.say(prompter.bold(f"Saved the profile {profile.name}."))
     app.say(f"Start it any time with: ornith-launcher launch {profile.name}")
     return profile
 
 
 def launch_now(app: App, prompter: PlainPrompter, profile: Profile) -> int:
-    if not prompter.confirm("Launch now?", default=True):
+    if not prompter.confirm("Launch now?", default=False):
         return 0
     if _hop_to_terminal(app, profile):
         return 0
+    app.say()
     return Launcher(app, make_runtime(app), prompter).serve(profile)
 
 

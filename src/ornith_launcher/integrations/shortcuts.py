@@ -1,7 +1,12 @@
 """Desktop shortcuts that launch a profile with a double-click (Linux ``.desktop`` files).
 
-``Terminal=false``: the launcher opens the chosen terminal itself. A ``.desktop``
+``Terminal=false`` when a terminal was chosen: the launcher opens it itself. A
+profile that runs in "this terminal" gets ``Terminal=true`` instead, or a click
+would start the server with no window to watch or stop it from. A ``.desktop``
 entry also avoids GNOME Files running a ``.sh`` inside GNOME Terminal.
+
+With the chat log on, the entry gets a "Show chat log" action (right-click on
+the icon or the menu entry, where the desktop shows actions).
 """
 
 from __future__ import annotations
@@ -13,21 +18,36 @@ from pathlib import Path
 from ornith_launcher.config import atomic_write_text
 
 
-def desktop_entry(profile: str, command: Sequence[str], comment: str) -> str:
+def desktop_entry(
+    profile: str,
+    command: Sequence[str],
+    comment: str,
+    in_terminal: bool = False,
+    chat_action: bool = False,
+) -> str:
     exec_line = " ".join(_desktop_quote(part) for part in [*command, "launch", profile])
-    return "\n".join(
-        [
-            "[Desktop Entry]",
-            "Type=Application",
-            f"Name=Ornith: {profile}",
-            f"Comment={comment}",
-            f"Exec={exec_line}",
-            "Terminal=false",
-            "Categories=Development;",
-            "X-Ornith-Launcher=1",
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        f"Name=Ornith: {profile}",
+        f"Comment={comment}",
+        f"Exec={exec_line}",
+        f"Terminal={'true' if in_terminal else 'false'}",
+        "Icon=utilities-terminal",  # a stock theme icon, no third-party logo
+        "Categories=Development;",
+        "X-Ornith-Launcher=1",
+    ]
+    if chat_action:
+        # In a terminal the chat log shows there; otherwise the launcher opens its own window.
+        chat = [*command, "chat-log", profile] + ([] if in_terminal else ["--window"])
+        lines[-1:-1] = ["Actions=chat-log;"]
+        lines += [
             "",
+            "[Desktop Action chat-log]",
+            "Name=Show chat log",
+            f"Exec={' '.join(_desktop_quote(part) for part in chat)}",
         ]
-    )
+    return "\n".join([*lines, ""])
 
 
 def _desktop_quote(arg: str) -> str:
@@ -45,7 +65,35 @@ def applications_dir(env: Mapping[str, str], home: Path) -> Path:
 
 
 def shortcut_path(profile: str, env: Mapping[str, str], home: Path) -> Path:
-    return applications_dir(env, home) / f"ornith-launcher-{profile}.desktop"
+    return applications_dir(env, home) / shortcut_name(profile)
+
+
+def shortcut_name(profile: str) -> str:
+    return f"ornith-launcher-{profile}.desktop"
+
+
+def user_dirs_file(env: Mapping[str, str], home: Path) -> Path:
+    config = env.get("XDG_CONFIG_HOME")
+    base = Path(config) if config and Path(config).is_absolute() else home / ".config"
+    return base / "user-dirs.dirs"
+
+
+def desktop_dir(user_dirs: str | None, home: Path) -> Path | None:
+    """The desktop folder named in ``user-dirs.dirs`` (else ~/Desktop); None if it is turned off.
+
+    The XDG convention turns the desktop off by setting it to the home folder itself.
+    """
+    for line in (user_dirs or "").splitlines():
+        key, _, value = line.strip().partition("=")
+        if key == "XDG_DESKTOP_DIR":
+            value = value.strip().strip('"')
+            if value.startswith("$HOME"):
+                value = str(home) + value[len("$HOME") :]
+            path = Path(value)
+            if not path.is_absolute() or path == home:
+                return None
+            return path
+    return home / "Desktop"
 
 
 def write_shortcut(path: Path, content: str) -> None:

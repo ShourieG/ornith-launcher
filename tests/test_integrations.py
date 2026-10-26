@@ -46,6 +46,33 @@ class ClaudeWrapperTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
 
+    def test_display_name_shows_the_model_quant_context_and_tags(self):
+        from dataclasses import replace
+
+        base = profile(self.home)
+
+        self.assertEqual(
+            claude_code.display_name(base), "Ornith-1.5-35B-A3B Q8_0, 262k context (local)"
+        )
+        uncensored = replace(
+            base,
+            model=replace(
+                base.model,
+                repo="uncensored-uploader/Ornith-1.5-9B-uncensored-GGUF",
+                uncensored=True,
+            ),
+        )
+        self.assertEqual(
+            claude_code.display_name(uncensored),
+            "Ornith-1.5-9B-uncensored Q8_0 [UNCENSORED], 262k context (local)",
+        )
+        unknown = replace(base, model=replace(base.model, repo=None, size_class="9B"))
+        self.assertTrue(claude_code.display_name(unknown).startswith("Ornith 1.5 9B Q8_0,"))
+        self.assertIn(
+            "NAME='Ornith-1.5-9B-uncensored Q8_0 [UNCENSORED], 262k context (local)'",
+            claude_code.wrapper_script(uncensored),
+        )
+
     def test_timeout_grows_with_context(self):
         self.assertEqual(claude_code.api_timeout_ms(65536), 600_000)
         self.assertEqual(claude_code.api_timeout_ms(262144), 600_000)
@@ -135,6 +162,18 @@ class OpenCodeTest(unittest.TestCase):
         other = profile(Path(self.tmp.name), name="other", port=18401)
         self.assertEqual(opencode.provider_id_for(config, self.profile), "ornith-launcher")
         self.assertEqual(opencode.provider_id_for(config, other), "ornith-launcher-other")
+
+    def test_restore_undoes_a_write_exactly(self):
+        path = Path(self.tmp.name) / "opencode.json"
+        path.write_text('{"model": "a"}')
+        backup = opencode.backup(path, opencode.datetime.datetime(2026, 1, 1))
+        opencode.write(path, opencode.merged({"model": "a"}, self.profile, "ornith-launcher", "x"))
+        opencode.restore({"config": str(path), "backup": str(backup)})
+        self.assertEqual(path.read_text(), '{"model": "a"}')
+        self.assertFalse(backup.exists())
+        # A config that setup created is deleted again.
+        opencode.restore({"config": str(path)})
+        self.assertFalse(path.exists())
 
     def test_comment_detection_ignores_strings(self):
         self.assertTrue(opencode.has_comments('{\n  // note\n  "a": 1\n}'))

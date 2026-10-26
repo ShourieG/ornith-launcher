@@ -3,6 +3,12 @@
 Start with `./ornith-launcher doctor`: it checks everything the launcher needs and prints the fix for each problem
 it finds. The sections below cover what it cannot fix for you.
 
+## Python
+
+- "needs Python 3.9 or newer; python3 here is 3.8": your distribution's `python3` is too old (Ubuntu 20.04 has
+  3.8, RHEL 8 has 3.6). Install a newer one alongside it, for example `sudo apt install python3.9` or `sudo dnf
+  install python39`; `./ornith-launcher` finds `python3.9` to `python3.14` by name.
+
 ## Docker
 
 | Message | Fix |
@@ -12,6 +18,8 @@ it finds. The sections below cover what it cannot fix for you.
 | Docker is installed but not running | `sudo systemctl start docker` |
 | Docker cannot use the NVIDIA GPU | Install the NVIDIA Container Toolkit, then `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
 | Docker is installed as a snap | The snap can only read files under your home folder: keep models there, or install Docker Engine from apt |
+
+Podman (including its `docker` alias) and rootless Docker are untested. Reports are welcome.
 
 The launcher never runs `sudo` itself; it prints the command for you.
 
@@ -24,8 +32,39 @@ The launcher never runs `sudo` itself; it prints the command for you.
 - "The server stopped while loading": the last log lines are printed; the full log is `docker logs
   ornith-launcher-NAME`. Running out of memory is the usual cause. Pick a smaller context or quant with
   `./ornith-launcher setup`.
+- "The model server (llama.cpp image) is not on this machine": `launch` offers to download it. If you say no,
+  run `./ornith-launcher setup --repair NAME` later.
+- The desktop icon asks "Allow Launching" (GNOME without `gio`, or other desktops): right-click it and choose that
+  once.
+- The server's own log shows in the server window, between the status lines (they start with `--`). Closed that
+  window? `./ornith-launcher logs NAME` shows the same log in any terminal; Docker keeps it, so nothing is lost.
+- Closed the chat log window by mistake: press `c` and Enter in the server window, or run
+  `./ornith-launcher chat-log NAME` in any terminal. The new window shows the last 10 requests again. Ctrl+C in
+  the chat log window never stops the server.
+- No chat log window opens: setup only offers it on a desktop with a terminal app. Over SSH, run
+  `./ornith-launcher chat-log NAME` in a second session.
+- "port N is in use by another program, so the chat log cannot listen there": another program has the profile's
+  port. Close it, or start without the chat log this time with `./ornith-launcher launch NAME --no-chat-log`.
+- "already running with different settings (the chat log is on for one and off for the other)": the server runs
+  without the chat log and this launch wants it, or the other way round. Stop it with
+  `./ornith-launcher stop NAME`, then launch again.
+- The chat log shows chat requests only (`/v1/chat/completions`, `/v1/completions`, `/completion` and
+  `/v1/messages`). Other requests pass through without showing.
 - SELinux hosts (Fedora, RHEL) block bind mounts; the launcher runs its container with `label=disable` and never
   relabels your files.
+
+## Model lists
+
+- Ctrl+click (Cmd+click on macOS) a model name to open its Hugging Face card. Konsole only follows links outside
+  full-screen lists, so the highlighted model's URL is printed under the list for you to Ctrl+click instead.
+- Use `--plain` for numbered menus if the full-screen list draws badly in your terminal.
+
+## Uninstall
+
+- The menu only lists what applies: the setup options once a setup exists, and Remove unfinished downloads while a
+  stopped download is left. That option deletes only the stopped downloads (all of them, or the one you pick).
+- The model server (llama.cpp image) is only offered when ornith-launcher pulled it and no other setup needs it.
+- If the image has other tags, uninstall removes only the launcher's reference, and the image stays for the others.
 
 ## Claude Code
 
@@ -53,5 +92,9 @@ The launcher never runs `sudo` itself; it prints the command for you.
 
 ## Downloads
 
-Ctrl+C pauses a download; run `./ornith-launcher setup` again to resume where it stopped. A file that fails its
-sha256 check is removed and downloaded again on the next run.
+Ctrl+C pauses a download and asks what next: Resume later keeps what has arrived (the default, also for a second
+Ctrl+C), and Delete it and exit removes it. To resume, run `./ornith-launcher setup`: its first menu says a download
+was stopped, and `r` (Resume a download) lists it with how much is done and carries on where it stopped, in the same
+folder and with the settings you chose before. If those settings no longer fit the machine, setup asks for them
+again. To delete it later, choose `u` (Uninstall), then Remove unfinished downloads. A file that fails its sha256
+check is removed and downloaded again on the next run.

@@ -42,6 +42,8 @@ your change touches platform code.
   small interfaces that tests can fake.
 - Error messages say what went wrong and give the exact command or step that fixes it.
 - Never commit model weights, chat-template text from model repositories, or other third-party content.
+- Tests use made-up uploader and repository names (for example `quant-uploader/`), never real Hugging Face
+  accounts.
 - Label every benchmark number TESTED, INFERRED or ESTIMATED.
 
 ## Sign your commits (DCO)

@@ -56,7 +56,7 @@ class ShippedFamiliesTest(unittest.TestCase):
         )
         self.assertIsNone(self.families.by_lineage_repo("someone/else"))
         self.assertTrue(self.families.is_official_owner("DeepReinforce-AI/x"))
-        self.assertFalse(self.families.is_official_owner("bartowski/Ornith-1.5-397B-GGUF"))
+        self.assertFalse(self.families.is_official_owner("quant-uploader/Ornith-1.5-397B-GGUF"))
 
 
 class FamiliesValidationTest(unittest.TestCase):

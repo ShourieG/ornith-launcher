@@ -110,6 +110,15 @@ def backup(path: Path, now: datetime.datetime) -> Path:
     return target
 
 
+def restore(record: Mapping[str, str]) -> None:
+    """Put the config back exactly as setup found it; only safe right after setup wrote it."""
+    path = Path(record["config"])
+    if record.get("backup"):
+        Path(record["backup"]).replace(path)
+    else:
+        path.unlink(missing_ok=True)  # setup created it
+
+
 def write(path: Path, config: Mapping[str, Any]) -> None:
     atomic_write_text(path, json.dumps(config, indent=2) + "\n")
 

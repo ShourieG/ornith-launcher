@@ -244,7 +244,7 @@ class CandidateTest(unittest.TestCase):
         self.assertTrue(all(c.entry.classification.version == "1.5" for c in kept))
         self.assertTrue(all(c.kv_type == "f16" for c in kept))
         self.assertFalse(any(c.entry.classification.uncensored for c in kept))
-        searched = [c for c in rows if Filters(search="bartowski iq1_s").accepts(c)]
+        searched = [c for c in rows if Filters(search="quant-uploader iq1_s").accepts(c)]
         self.assertTrue(searched)
         self.assertTrue(all("IQ1_S" in c.entry.file.name for c in searched))
         no_low = Filters(show_low_bit=False, only_fitting=True)

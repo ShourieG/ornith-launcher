@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from ornith_launcher import __version__, doctor, launch, scan, uninstall, wizard
+from ornith_launcher import __version__, chat_log, doctor, launch, scan, uninstall, wizard
 from ornith_launcher.app import App
 from ornith_launcher.bench import run as bench
 from ornith_launcher.errors import OrnithLauncherError
@@ -54,6 +54,22 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_name_argument(monitor_parser)
     monitor_parser.set_defaults(handler=launch.run_monitor)
 
+    logs_parser = commands.add_parser(
+        "logs", help="show a server's own log live (Ctrl+C closes only the log)"
+    )
+    launch.add_name_argument(logs_parser)
+    logs_parser.set_defaults(handler=launch.run_logs)
+
+    chat_parser = commands.add_parser(
+        "chat-log", help="show requests to a model and its replies live"
+    )
+    launch.add_chat_log_arguments(chat_parser)
+    chat_parser.set_defaults(handler=launch.run_chat_log)
+
+    proxy_parser = commands.add_parser(chat_log.PROXY_COMMAND)  # started by launch; not listed
+    launch.add_name_argument(proxy_parser, required=True)
+    proxy_parser.set_defaults(handler=launch.run_chat_proxy)
+
     remove_parser = commands.add_parser(
         "remove", help="remove a profile (asks before deleting files)"
     )
@@ -62,9 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser.set_defaults(handler=launch.run_remove)
 
     uninstall_parser = commands.add_parser(
-        "uninstall", help="undo everything ornith-launcher created"
+        "uninstall",
+        help="remove setups, unfinished downloads, or everything ornith-launcher created",
     )
-    uninstall_parser.add_argument("--yes", action="store_true", help="accept the defaults")
     uninstall_parser.set_defaults(handler=uninstall.run_uninstall)
 
     doctor_parser = commands.add_parser(
