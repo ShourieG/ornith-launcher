@@ -12,7 +12,7 @@ from ornith_launcher.catalog import catalog as cat
 from ornith_launcher.catalog.catalog import save_catalog
 from ornith_launcher.config import resolve_paths
 from tests.catalog_fixtures import official_catalog
-from tests.test_system import spark_host
+from tests.test_system import SPARK_MEMINFO, spark_host
 
 
 def make_app(tmp: str) -> App:
@@ -64,6 +64,31 @@ class ScanCommandTest(unittest.TestCase):
         self.assertIn("LOW-BIT", listing)
         self.assertIn("UNTESTED LOCALLY", listing)
         self.assertIn("more. Show more with --limit", listing)
+
+    def test_full_list_uses_the_setup_fit_verdicts(self):
+        _, out = self.run_cli("--full", "--limit", "0")
+        rows = out.split("All combinations")[1].splitlines()
+
+        def verdicts(model: str, quant: str) -> set[str]:
+            found = set()
+            for row in rows:
+                if model in row and f" {quant} " in row:
+                    found |= {v for v in ("yes", "stretch", "too big") if f" {v} " in row}
+            return found
+
+        self.assertEqual(verdicts("Ornith 1.5 35B-A3B", "Q8_0"), {"yes"})
+        self.assertIn("stretch", verdicts("Ornith 1.5 122B", "Q4_K_M"))
+        self.assertEqual(verdicts("Ornith 1.5 397B", "Q8_0"), {"too big"})
+        self.assertIn("too big = more than this machine has, at your own risk", out)
+
+    def test_suggestion_warns_when_other_apps_hold_the_memory(self):
+        busy = SPARK_MEMINFO.replace("MemAvailable:   122117160 kB", "MemAvailable:   20971520 kB")
+        files = dict(spark_host().files, **{"/proc/meminfo": busy})
+        self.app.host = spark_host(files=files)
+        _, out = self.run_cli()
+        self.assertIn("Suggested for this machine:", out)
+        self.assertIn("Warning: stretch: needs", out)
+        self.assertIn("close other apps before launching", out)
 
     def test_uncensored_needs_the_flag_and_warns(self):
         _, out = self.run_cli("--full", "--search", "uncensored")

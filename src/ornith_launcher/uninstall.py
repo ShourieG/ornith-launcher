@@ -306,11 +306,11 @@ def apply_removal(app: App, removal: Removal, runtime: DockerRuntime) -> None:
 def run_uninstall(app: App, args) -> int:
     from ornith_launcher.wizard import make_prompter
 
+    prompter = make_prompter(app)
     try:
-        uninstall_menu(app, make_prompter(app))
+        uninstall_menu(app, prompter)
     except Cancelled:
-        app.say()
-        app.say("Nothing more was removed.")
+        prompter.quit_screen(["Nothing more was removed."])
         return 1
     return 0
 

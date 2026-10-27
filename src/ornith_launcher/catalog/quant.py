@@ -72,6 +72,28 @@ def quant_from_file_type(file_type: object) -> str | None:
     return None
 
 
+# Quant groups by bits per weight, finest first, for the setup lists' Quant filter.
+QUANT_GROUPS = ("16", "8", "5-6", "4", "low")
+_GROUP_PREFIXES = (
+    ("16", ("BF16", "F16", "F32")),
+    ("8", ("Q8_",)),
+    ("5-6", ("Q5_", "Q6_")),
+    ("4", ("Q4_", "IQ4_", "NVFP4", "MXFP4")),
+    ("low", ("Q3_", "Q2_", "Q1_", "IQ3_", "IQ2_", "IQ1_", "TQ")),
+)
+
+
+def quant_group(quant: str | None) -> str | None:
+    """The QUANT_GROUPS entry for a quant label, or None when the label is unknown."""
+    if quant is None:
+        return None
+    base = quant.upper().removeprefix("UD-")
+    for group, prefixes in _GROUP_PREFIXES:
+        if base.startswith(prefixes):
+            return group
+    return None
+
+
 def is_low_bit(quant: str | None, low_bit_prefixes: Iterable[str]) -> bool:
     """True for quants below roughly 3 bits per weight (IQ1_*, IQ2_*, Q2_K, ...)."""
     if quant is None:

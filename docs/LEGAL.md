@@ -41,8 +41,9 @@ Hugging Face instead.
   "I understand". `--yes` never gives that answer; it needs `--accept-uncensored`. The opt-in is saved and
   applies to every list and search, in later runs too, until the user hides them again; the lists say
   "uncensored shown" while it is on.
-- The "only uncensored" list needs the same opt-in, shows the uncensored warning above the list, and still needs
-  "I understand" before a model is chosen. Its order (best fit, or a sort the user picks) is not a recommendation.
+- "Only uncensored models" (the Uncensored filter in the model lists) needs the same opt-in, shows the uncensored
+  warning above the list, and still needs "I understand" before a model is chosen. Its order (best fit, or a sort
+  the user picks) is not a recommendation.
 - The uncensored label comes from keywords (`data/classification.json`) in names, tags and the models a file was
   made from, so it can be wrong either way. The disclaimer calls it best effort, not a content filter, points
   users to each model card (linked from every list row), and asks them to report unlabelled models.
@@ -90,7 +91,7 @@ matters before going public.
 - [ ] `CREDITS.md` names everyone the project builds on, with links and licences.
 - [ ] The Gemma 4 licence claim was checked against Google's own page, or reworded.
 - [ ] Uncensored models need the typed confirmation, and `--yes` does not bypass it.
-- [ ] The "only uncensored" list needs the opt-in and shows the warning, and the disclaimer says the uncensored
+- [ ] "Only uncensored models" needs the opt-in and shows the warning, and the disclaimer says the uncensored
       label is a best-effort guess from names, tags and lineage.
 - [ ] The disclaimer (`DISCLAIMER.md` and `data/disclaimer.txt`) calls the labelling best effort, points to the
       model cards, gives the issues link for unlabelled models, and does not call Hugging Face liable.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Sequence
 
 GIB = 1024**3
@@ -9,6 +10,55 @@ GIB = 1024**3
 
 def gib(value: int | float) -> str:
     return f"{value / GIB:.1f} GiB"
+
+
+def clean_cell(text: str) -> str:
+    """``text`` on one line: tabs, newlines and other control characters become spaces."""
+    return "".join(" " if unicodedata.category(ch)[0] == "C" else ch for ch in text)
+
+
+def _char_width(ch: str) -> int:
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def text_width(text: str) -> int:
+    """Terminal columns ``text`` takes: wide (CJK) characters take two, combining ones none."""
+    return sum(_char_width(ch) for ch in text)
+
+
+def pad(text: str, width: int) -> str:
+    """``text`` padded with spaces to ``width`` columns."""
+    return text + " " * max(0, width - text_width(text))
+
+
+def clip(text: str, width: int, marker: str = "") -> str:
+    """``text`` cut to at most ``width`` columns, ending in ``marker`` when it was cut."""
+    if text_width(text) <= width:
+        return text
+    room = width - text_width(marker)
+    kept, used = [], 0
+    for ch in text:
+        if used + _char_width(ch) > room:
+            break
+        kept.append(ch)
+        used += _char_width(ch)
+    return "".join(kept) + marker
+
+
+def column_widths(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> list[int]:
+    """The width of each column: its widest cell or header, in terminal columns."""
+    widths = [text_width(h) for h in headers]
+    for row in rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], text_width(cell))
+    return widths
+
+
+def table_line(cells: Sequence[str], widths: Sequence[int]) -> str:
+    """One row: each cell padded to its column, two spaces between columns."""
+    return "  ".join(pad(cell, widths[i]) for i, cell in enumerate(cells)).rstrip()
 
 
 def key_values(rows: Sequence[tuple[str, str]], indent: str = "  ") -> list[str]:
@@ -28,7 +78,14 @@ def compact_count(value: int) -> str:
 
 
 # How model cards and users name the context sizes on offer.
-_CONTEXT_LABELS = {65536: "64k", 131072: "128k", 262144: "262k", 524288: "524k", 1048576: "1M"}
+_CONTEXT_LABELS = {
+    32768: "32k",
+    65536: "64k",
+    131072: "128k",
+    262144: "262k",
+    524288: "524k",
+    1048576: "1M",
+}
 
 
 def context_label(tokens: int) -> str:
@@ -37,16 +94,17 @@ def context_label(tokens: int) -> str:
 
 
 def table(headers: Sequence[str], rows: Sequence[Sequence[str]], *, max_width: int = 0) -> str:
-    """Left-aligned columns separated by two spaces; the last column is cut to ``max_width``."""
-    widths = [len(h) for h in headers]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(cell))
+    """Left-aligned columns separated by two spaces; each line is cut to ``max_width``.
+
+    Widths count terminal columns, so wide characters cannot push a column out of line.
+    """
+    headers = [clean_cell(h) for h in headers]
+    rows = [[clean_cell(cell) for cell in row] for row in rows]
+    widths = column_widths(headers, rows)
     lines = []
-    for row in [list(headers), *map(list, rows)]:
-        cells = [cell.ljust(widths[i]) for i, cell in enumerate(row)]
-        line = "  ".join(cells).rstrip()
-        if max_width and len(line) > max_width:
-            line = line[: max_width - 1] + "…"
+    for row in [headers, *rows]:
+        line = table_line(row, widths)
+        if max_width:
+            line = clip(line, max_width, "…")
         lines.append(line)
     return "\n".join(lines)

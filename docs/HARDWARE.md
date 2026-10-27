@@ -56,3 +56,6 @@ experts in system RAM (`--cpu-moe`); that placement is ESTIMATED.
 - Docker Engine, with the NVIDIA Container Toolkit for NVIDIA GPUs. `ornith-launcher doctor` checks both.
 - Disk space for the model (from about 5 GiB for a 9B at Q4_K_M to hundreds of GiB for a 397B) plus 2 GiB, and a
   few GB for the llama.cpp image.
+- Memory for the model and its context: from about 10.5 GiB for a 9B at Q4_K_M with a 32k context and vision off
+  (ESTIMATED). On a small machine, open All models in setup and sort it by "memory needed, smallest first", or
+  sort the best fit list by "best for small memory".

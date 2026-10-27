@@ -19,7 +19,14 @@ from typing import Any
 
 from ornith_launcher.catalog import gguf
 from ornith_launcher.catalog.arch import ModelArch
-from ornith_launcher.catalog.catalog import Entry, FilePart, ModelFile, Repo, header_subset
+from ornith_launcher.catalog.catalog import (
+    Entry,
+    FilePart,
+    ModelFile,
+    Repo,
+    header_subset,
+    is_projector,
+)
 from ornith_launcher.catalog.classify import Classification, FileEvidence, Rules, Source, classify
 from ornith_launcher.catalog.families import Families
 from ornith_launcher.catalog.gguf import GGUFError, NeedMoreBytes
@@ -175,7 +182,7 @@ def _hf_cache_files(location: Location) -> Iterator[LocalFile]:
         if not snapshots.is_dir():
             continue
         for path in sorted(snapshots.rglob("*")):
-            if path.suffix.lower() != ".gguf" or path.name.lower().startswith("mmproj"):
+            if path.suffix.lower() != ".gguf" or is_projector(path.name):
                 continue
             item = _local_file(path, location.owner_app, repo_hint=repo_id)
             if item is not None:
@@ -231,7 +238,7 @@ def _walk(location: Location, root: Path, clock: Callable[[], float]) -> list[Lo
         lower = {name.lower() for name in names}
         for name in names:
             low = name.lower()
-            if not low.endswith(".gguf") or low.startswith("mmproj") or low.endswith(SKIP_SUFFIXES):
+            if not low.endswith(".gguf") or is_projector(name) or low.endswith(SKIP_SUFFIXES):
                 continue
             split = _SPLIT.match(name)
             if split and int(split["part"]) != 1:
@@ -434,7 +441,7 @@ def _find_mmproj(item: LocalFile, header: Mapping[str, Any]) -> Path | None:
         return None
     folder = item.path.parent
     try:
-        candidates = sorted(p for p in folder.iterdir() if p.name.lower().startswith("mmproj"))
+        candidates = sorted(p for p in folder.iterdir() if is_projector(p.name))
     except OSError:
         return None
     candidates = [p for p in candidates if p.suffix.lower() == ".gguf"]

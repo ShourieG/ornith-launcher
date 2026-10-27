@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 SEED_FILE = "catalog-seed.json"
 REFRESH_SECONDS = 24 * 3600
+# The listing fields a scan reads. With expand, Hugging Face returns only what is named, and
+# the lifetime download count is only available this way (full=true leaves it out).
+_EXPANDED = ("sha", "siblings", "tags", "gated", "lastModified", "downloads", "downloadsAllTime")
+LISTING_FIELDS = tuple(("expand[]", name) for name in (*_EXPANDED, "likes"))
 LINEAGE_RELATIONS = ("", "quantized:", "finetune:", "merge:", "adapter:")
 
 # "model-00001-of-00003.gguf": the first part holds the header.
@@ -54,6 +58,22 @@ _HEADER_GENERAL_KEYS = (
     "general.tags",
 )
 _HEADER_BASE_MODEL = re.compile(r"general\.base_model\.\d+\.(name|repo_url)")
+PROJECTOR_ARCH = "clip"  # general.architecture of a vision projector (mmproj)
+HEADER_TRIES = 3  # model files tried for a header before giving up
+
+
+def is_projector(name: str) -> bool:
+    """A vision projector file, however it is named.
+
+    Uploaders write ``mmproj-BF16.gguf``, ``Model.mmproj-Q8_0.gguf``, ``Model-mmproj-F16.gguf``
+    or ``Model.BF16-mmproj.gguf``; only the first starts with "mmproj".
+    """
+    lower = PurePosixPath(name).name.lower()
+    return lower.endswith(".gguf") and "mmproj" in lower
+
+
+def is_projector_header(header: Mapping[str, Any] | None) -> bool:
+    return header is not None and header.get("general.architecture") == PROJECTOR_ARCH
 
 
 @dataclass(frozen=True)
@@ -91,13 +111,14 @@ class Repo:
     licence: str | None  # from the "license:" tag, e.g. "mit"; None when the repo declares none
     base_models: tuple[str, ...]
     tags: tuple[str, ...]
-    downloads: int
+    downloads: int  # in the last 30 days, as Hugging Face counts them
     files: tuple[ModelFile, ...]
     mmproj: tuple[FilePart, ...]
     header: Mapping[str, Any] | None  # architecture keys of one model file; None if unreadable
     header_file: str | None = None  # the file the header was read from
     header_error: str | None = None
     likes: int = 0
+    downloads_all_time: int = 0
 
     @property
     def owner(self) -> str:
@@ -152,6 +173,7 @@ def repo_to_dict(repo: Repo) -> dict[str, Any]:
         "base_models": list(repo.base_models),
         "tags": list(repo.tags),
         "downloads": repo.downloads,
+        "downloads_all_time": repo.downloads_all_time,
         "likes": repo.likes,
         "files": [[_part_to_list(p) for p in f.parts] for f in repo.files],
         "mmproj": [_part_to_list(p) for p in repo.mmproj],
@@ -162,6 +184,12 @@ def repo_to_dict(repo: Repo) -> dict[str, Any]:
 
 
 def repo_from_dict(raw: Mapping[str, Any]) -> Repo:
+    files = [ModelFile(tuple(_part_from_list(p) for p in f)) for f in raw["files"]]
+    mmproj = [_part_from_list(p) for p in raw.get("mmproj", ())]
+    # Catalogs written before is_projector() knew every naming listed some projectors
+    # as models; sort them again on load.
+    mmproj += [f.parts[0] for f in files if len(f.parts) == 1 and is_projector(f.path)]
+    files = [f for f in files if not (len(f.parts) == 1 and is_projector(f.path))]
     return Repo(
         id=str(raw["id"]),
         sha=str(raw["sha"]),
@@ -171,9 +199,10 @@ def repo_from_dict(raw: Mapping[str, Any]) -> Repo:
         base_models=tuple(raw.get("base_models", ())),
         tags=tuple(raw.get("tags", ())),
         downloads=int(raw.get("downloads") or 0),
+        downloads_all_time=int(raw.get("downloads_all_time") or 0),
         likes=int(raw.get("likes") or 0),
-        files=tuple(ModelFile(tuple(_part_from_list(p) for p in f)) for f in raw["files"]),
-        mmproj=tuple(_part_from_list(p) for p in raw.get("mmproj", ())),
+        files=tuple(files),
+        mmproj=tuple(mmproj),
         header=raw.get("header"),
         header_file=raw.get("header_file"),
         header_error=raw.get("header_error"),
@@ -348,7 +377,7 @@ def group_files(siblings: Iterable[Mapping[str, Any]]) -> tuple[list[ModelFile],
             continue
         lfs = item.get("lfs") or {}
         part = FilePart(path, int(lfs.get("size") or item.get("size") or 0), lfs.get("oid"))
-        if name.lower().startswith("mmproj"):
+        if is_projector(name):
             mmproj.append(part)
             continue
         match = _SPLIT.match(name)
@@ -402,7 +431,7 @@ class CatalogBuilder:
                     queries.append([("filter", f"base_model:{relation}{base}"), ("filter", "gguf")])
         for index, query in enumerate(queries, 1):
             self._report(f"Searching Hugging Face ({index}/{len(queries)})")
-            params = query + [("full", "true"), ("limit", "1000")]
+            params = query + [*LISTING_FIELDS, ("limit", "1000")]
             for model in self.hub.list_models(params):
                 found.setdefault(model["id"], model)
         return found
@@ -424,11 +453,14 @@ class CatalogBuilder:
         for index, (repo_id, model) in enumerate(sorted(candidates.items()), 1):
             self._progress.done = index - 1
             known = old.get(repo_id)
-            if known is not None and known.sha == model.get("sha") and known.header is not None:
+            reusable = known is not None and known.header is not None
+            # A header read from a projector (before is_projector()) is read again.
+            if reusable and known.sha == model.get("sha") and not is_projector_header(known.header):
                 # The listing already carries the counts, so they stay current at no cost.
                 repos[repo_id] = replace(
                     known,
                     downloads=int(model.get("downloads") or 0),
+                    downloads_all_time=int(model.get("downloadsAllTime") or 0),
                     likes=int(model.get("likes") or 0),
                 )
                 continue
@@ -459,15 +491,7 @@ class CatalogBuilder:
             header_error = "login required"
         else:
             files, mmproj = group_files(self.hub.tree(repo_id, sha))
-            if files:
-                first = min(files, key=_header_preference)
-                try:
-                    fetch = self.hub.range_reader(repo_id, sha, first.path)
-                    metadata = gguf.read_metadata(fetch, gguf.stop_at_key_prefix("tokenizer."))
-                    header = header_subset(metadata.values)
-                    header_file = first.path
-                except (GGUFError, NeedMoreBytes, HubError) as exc:
-                    header_error = str(exc)
+            header, header_file, header_error = self.read_header(repo_id, sha, files)
         return Repo(
             id=repo_id,
             sha=sha,
@@ -477,6 +501,7 @@ class CatalogBuilder:
             base_models=_base_models(tags),
             tags=tuple(t for t in tags if not t.startswith(("base_model:", "region:"))),
             downloads=int(model.get("downloads") or 0),
+            downloads_all_time=int(model.get("downloadsAllTime") or 0),
             likes=int(model.get("likes") or 0),
             files=tuple(files),
             mmproj=tuple(mmproj),
@@ -484,6 +509,26 @@ class CatalogBuilder:
             header_file=header_file,
             header_error=header_error,
         )
+
+    def read_header(
+        self, repo_id: str, sha: str, files: Sequence[ModelFile]
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        """(header, file it came from, error) from the most typical model file.
+
+        A file that turns out to be a vision projector is skipped for the next one.
+        """
+        error = None
+        for file in sorted(files, key=_header_preference)[:HEADER_TRIES]:
+            try:
+                fetch = self.hub.range_reader(repo_id, sha, file.path)
+                metadata = gguf.read_metadata(fetch, gguf.stop_at_key_prefix("tokenizer."))
+            except (GGUFError, NeedMoreBytes, HubError) as exc:
+                return None, None, str(exc)
+            header = header_subset(metadata.values)
+            if not is_projector_header(header):
+                return header, file.path, None
+            error = f"{file.path} is a vision projector, not a model"
+        return None, None, error
 
     def _report(self, message: str) -> None:
         self._progress.message = message
@@ -496,7 +541,8 @@ def _header_preference(file: ModelFile) -> tuple[bool, bool, bool, int]:
     lower = file.path.lower()
     return (
         "/" in file.path and len(file.parts) == 1,
-        any(marker in lower for marker in _PARTIAL_MARKERS),
+        # "mtp-Model-Q8_0.gguf" is an MTP head on its own, not a model that has MTP layers.
+        any(marker in lower for marker in _PARTIAL_MARKERS) or file.name.lower().startswith("mtp-"),
         quant_from_name(file.name) is None,
         file.parts[0].size,
     )
@@ -505,7 +551,7 @@ def _header_preference(file: ModelFile) -> tuple[bool, bool, bool, int]:
 def _has_model_gguf(model: Mapping[str, Any]) -> bool:
     for sibling in model.get("siblings") or ():
         name = PurePosixPath(str(sibling.get("rfilename", ""))).name
-        if name.lower().endswith(".gguf") and not name.lower().startswith("mmproj"):
+        if name.lower().endswith(".gguf") and not is_projector(name):
             if not _not_a_model(name):
                 return True
     return False

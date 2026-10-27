@@ -48,6 +48,7 @@ class FakeHub:
         self.tree_calls = []
 
     def list_models(self, params):
+        self.listing_params = list(params)
         return list(self.searches.get(params[0][1], []))
 
     def tree(self, repo_id, revision):
@@ -58,6 +59,8 @@ class FakeHub:
 
     def range_reader(self, repo_id, revision, path):
         data = self.headers[repo_id]
+        if isinstance(data, dict):  # a header per file
+            data = data[path]
         return lambda size: data[:size]
 
 
@@ -95,6 +98,28 @@ class FileGroupingTest(unittest.TestCase):
         self.assertEqual(files[0].size, 50)
         self.assertEqual(len(files[0].parts), 2)
         self.assertEqual([p.path for p in mmproj], ["mmproj-M-F16.gguf"])
+
+    def test_projectors_are_found_however_they_are_named(self):
+        names = [
+            "Model.mmproj-Q8_0.gguf",
+            "Model-mmproj-F16.gguf",
+            "Model.BF16-mmproj.gguf",
+            "mmproj/35B/Model-mmproj-BF16-V1.0.gguf",
+            "MMPROJ-model-f16.gguf",
+        ]
+        files, mmproj = group_files(
+            [tree_item("Model-Q4_K_M.gguf", 9)] + [tree_item(n, 1) for n in names]
+        )
+        self.assertEqual([f.path for f in files], ["Model-Q4_K_M.gguf"])
+        self.assertEqual(sorted(p.path for p in mmproj), sorted(names))
+
+    def test_an_old_catalog_with_projectors_listed_as_models_is_sorted_on_load(self):
+        old = catalog_to_dict(official_catalog())
+        repo = old["repos"][0]
+        repo["files"].append([["Model.mmproj-Q8_0.gguf", 600, None]])
+        loaded = catalog_from_dict(old, "cache").repos[repo["id"]]
+        self.assertNotIn("Model.mmproj-Q8_0.gguf", [f.path for f in loaded.files])
+        self.assertIn("Model.mmproj-Q8_0.gguf", [p.path for p in loaded.mmproj])
 
     def test_header_subset_keeps_only_what_the_launcher_uses(self):
         values = {
@@ -181,6 +206,53 @@ class BuilderTest(unittest.TestCase):
         self.assertIsNone(gated.header)
         self.assertNotIn("gated/repo", self.hub.tree_calls)
 
+    def projector_repo(self):
+        """A repo whose smallest file is a projector the old name rule missed."""
+        clip = gguf_bytes([("general.architecture", ValueType.STRING, "clip")])
+        self.hub.searches["Ornith"].append(search_result("quant-uploader/Ornith-1.5-9B-GGUF"))
+        self.hub.trees["quant-uploader/Ornith-1.5-9B-GGUF"] = [
+            tree_item("Ornith-1.5-9B-Q8_0.gguf", 9 * 2**30),
+            tree_item("Ornith-1.5-9B.mmproj-Q8_0.gguf", 2**29),
+        ]
+        self.hub.headers["quant-uploader/Ornith-1.5-9B-GGUF"] = {
+            "Ornith-1.5-9B-Q8_0.gguf": gguf_bytes(ornith_pairs("9B")),
+            "Ornith-1.5-9B.mmproj-Q8_0.gguf": clip,
+        }
+        return "quant-uploader/Ornith-1.5-9B-GGUF"
+
+    def test_a_header_is_never_read_from_a_projector(self):
+        repo_id = self.projector_repo()
+        repo = CatalogBuilder(self.hub, FAMILIES).build().repos[repo_id]
+        self.assertEqual(repo.header_file, "Ornith-1.5-9B-Q8_0.gguf")
+        self.assertEqual(repo.header["general.architecture"], "qwen35")
+        self.assertEqual(repo.best_mmproj().path, "Ornith-1.5-9B.mmproj-Q8_0.gguf")
+        # Even a projector the names do not give away is skipped for the next file.
+        builder = CatalogBuilder(self.hub, FAMILIES)
+        clip_first = [ModelFile((FilePart("Ornith-1.5-9B.mmproj-Q8_0.gguf", 1, None),))]
+        clip_first.append(ModelFile((FilePart("Ornith-1.5-9B-Q8_0.gguf", 9, None),)))
+        header, path, error = builder.read_header(repo_id, "s1", clip_first)
+        self.assertEqual((path, error), ("Ornith-1.5-9B-Q8_0.gguf", None))
+        _, _, error = builder.read_header(repo_id, "s1", clip_first[:1])
+        self.assertEqual(error, "Ornith-1.5-9B.mmproj-Q8_0.gguf is a vision projector, not a model")
+
+    def test_a_header_comes_from_a_whole_model_not_an_mtp_head(self):
+        from ornith_launcher.catalog.catalog import _header_preference
+
+        head = ModelFile((FilePart("mtp-Ornith-1.5-9B-Q8_0.gguf", 2 * 2**30, None),))
+        model = ModelFile((FilePart("Ornith-1.5-9B-Q4_K_M.gguf", 5 * 2**30, None),))
+        self.assertEqual(min([head, model], key=_header_preference), model)
+
+    def test_a_cached_projector_header_is_read_again_on_refresh(self):
+        repo_id = self.projector_repo()
+        first = CatalogBuilder(self.hub, FAMILIES).build()
+        clip = {"general.architecture": "clip"}
+        stale = replace(first.repos[repo_id], header=clip)  # as the old code stored it
+        previous = replace(first, repos={**first.repos, repo_id: stale})
+        self.hub.tree_calls.clear()
+        again = CatalogBuilder(self.hub, FAMILIES).build(previous)
+        self.assertEqual(self.hub.tree_calls, [repo_id])  # same revision, read again anyway
+        self.assertEqual(again.repos[repo_id].header["general.architecture"], "qwen35")
+
     def test_unchanged_repos_are_reused_and_failures_keep_old_data(self):
         first = CatalogBuilder(self.hub, FAMILIES).build()
         self.hub.tree_calls.clear()
@@ -197,14 +269,26 @@ class BuilderTest(unittest.TestCase):
         self.hub.tree_calls.clear()
         for results in self.hub.searches.values():
             for result in results:
-                result.update(likes=554, downloads=3860800)
+                result.update(likes=554, downloads=3860800, downloadsAllTime=9100000)
         second = CatalogBuilder(self.hub, FAMILIES).build(first)
         self.assertEqual(self.hub.tree_calls, [])  # nothing read again
         self.assertTrue(second.repos)
         for repo in second.repos.values():
-            self.assertEqual((repo.likes, repo.downloads), (554, 3860800))
+            self.assertEqual(
+                (repo.likes, repo.downloads, repo.downloads_all_time), (554, 3860800, 9100000)
+            )
         again = catalog_from_dict(json.loads(json.dumps(catalog_to_dict(second))), "cache")
         self.assertEqual(again.repos, second.repos)
+
+    def test_the_listing_names_every_field_it_reads(self):
+        # With expand, Hugging Face returns only the named fields; full=true has no lifetime count.
+        CatalogBuilder(self.hub, FAMILIES).build()
+        expanded = {value for key, value in self.hub.listing_params if key == "expand[]"}
+        self.assertLessEqual(
+            {"sha", "siblings", "tags", "gated", "lastModified", "downloads", "likes"}, expanded
+        )
+        self.assertIn("downloadsAllTime", expanded)
+        self.assertNotIn(("full", "true"), self.hub.listing_params)
 
     def test_saves_progress_periodically(self):
         saved = []

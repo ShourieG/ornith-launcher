@@ -9,6 +9,7 @@ from ornith_launcher import __version__, chat_log, doctor, launch, scan, uninsta
 from ornith_launcher.app import App
 from ornith_launcher.bench import run as bench
 from ornith_launcher.errors import OrnithLauncherError
+from ornith_launcher.ui.prompts import Cancelled
 
 PROG = "ornith-launcher"
 
@@ -112,6 +113,10 @@ def main(argv: list[str] | None = None, app: App | None = None) -> int:
         app.warn(f"{PROG}: {exc}")
         if exc.hint:
             app.warn(exc.hint)
+        return 1
+    except Cancelled:
+        # A quit no command handled itself, e.g. q or Ctrl+D at a launch question.
+        wizard.make_prompter(app).quit_screen(["Stopped. Nothing was changed."])
         return 1
     except KeyboardInterrupt:
         app.warn("")

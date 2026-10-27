@@ -43,19 +43,45 @@ All notable changes to this project are recorded here. The format follows
   reaches 80 °C until it cools to 60 °C. Results go to a local JSONL file with the machine, build, image and
   model checksum. `docs/BENCHMARKS.md` lists the DGX Spark results, each labelled TESTED, INFERRED or ESTIMATED,
   and is generated from `data/tested.json`.
-- Browsing models in `setup`: an "only uncensored" list, behind the same opt-in as showing uncensored models and
-  with the uncensored warning above it. The uncensored label is a guess from names and tags, as the disclaimer
-  says.
 - Full-screen lists link each model to its Hugging Face model card (Ctrl+click, or Cmd+click on macOS), and the
   highlighted model's URL is printed too, for terminals such as Konsole that only follow plain URLs there. Pages
   turn with the arrow keys as well as `n` and `p`.
-- Browsing models in `setup`: Download size, Likes and 30-day downloads columns next to Memory (likes and downloads
-  are per Hugging Face repo), and a Sort action (`s`) for the long lists: memory or download size either way,
-  likes or downloads most first; models that fit stay first. Search is `/`. Catalog refreshes now update
-  likes and downloads for unchanged repos too.
-- Back (`b`, or Esc in full-screen lists) and Main menu (`m`) in the setup menus up to the summary, so a model
-  can be changed from the context step. Back from the context step returns to the same list and page. On the
-  first menu, browse and download is `d`. Each setup step opens on a fresh screen.
+- Browsing models in `setup`: after Suggested come two lists, the best fit list (`b`) and All models (`a`). The
+  best fit list is advice: only what can run on this machine (fits or stretch), each file at its recommended
+  setting, best first. All models is the catalog: every file at the least memory it can run with (32k, vision off,
+  in a "Needs at least" column), newest version and largest model first, and fit never moves or hides a row there.
+  The best fit list says how many matching files are too big and that `a` shows them. Picking a row in All models
+  starts the next screens from the file's recommended setting, and a stretch or too-big file asks first.
+- Columns: Download size, Likes, downloads in the last 30 days and in all ("DLs/30d", "DLs total", both per
+  Hugging Face repo) and Updated (when the repo last changed), next to Memory and Fits.
+- Sort (`s`): each list keeps its own. The best fit list offers best first and "best for small memory" (advice,
+  what fits on top), then the plain orders; All models offers model order, model size, memory needed, download size
+  and quant either way, likes, downloads (30 days), downloads (lifetime) and updated. Plain orders go by their
+  value alone. The quant sort goes by bits per weight, so NVFP4, MXFP4, IQ and UD quants of any model size sort on
+  one scale.
+- Filters (`f`), shared by both lists, with a live count of matching files and how many fit: model size, version
+  and quant group (tick any number), source, licence, vision, updated in the last 7 to 365 days, likes, downloads
+  in the last 30 days, downloads in all, and Uncensored (hidden, shown, or only uncensored models, behind the same
+  warning and saved opt-in as before; "only" lasts until setup ends). Every change applies at once and the picker
+  says how many files now match; Esc goes back with it kept, and `c` clears that filter. Search (`/`) narrows the
+  list you are in and never reorders it; from Suggested it opens All models. `c` clears the search and filters.
+  Every list names its filters and search under its title. Sorts and filters last until setup ends.
+- Catalog refreshes update likes and both download counts for unchanged repos too. The scan names the listing
+  fields it reads, since Hugging Face only gives the lifetime count that way. The shipped list has the counts
+  of 2026-10-27.
+- Settings after the context screen is a menu: Context, KV cache, Parallel requests, Vision and Port, then Continue
+  in bold below a blank line (highlighted, so Enter alone goes on). Enter opens a setting; KV cache, Parallel
+  requests and Vision show each option's memory, fit and free memory, and one that makes the setting a stretch or
+  too big asks first. The memory line above the menu follows every change. Esc goes back to the context screen;
+  Context opens it too and comes back. The port must be from 1024 to 65535 and free. Before, "Use these settings?
+  No" went through four questions with no way back.
+- Under each list, the highlighted row's details are on separate lines with bold labels (File, Why, Too big or
+  Stretch, Score, Badges, Notes), wrapped to the window, then a blank line and "URL - <model card>". The plain
+  menus show the same block under each row. The space they take stays the same as you move, so the list does not
+  jump.
+- Back (Esc; in plain menus, Esc then Enter, or type esc) and Main menu (`m`) in the setup menus up to the summary,
+  so a model can be changed from the context step. Back from the context step returns to the same list and page. On
+  the first menu, browse and download is `d`. Each setup step opens on a fresh screen.
 - The server window starts with how to stop it: Ctrl+C stops the server and unloads the model, and closing the
   window leaves it running (with the command to stop it later).
 - Claude Code and OpenCode list the model by its own name with quant and context, and with `[UNCENSORED]` when it
@@ -76,6 +102,47 @@ All notable changes to this project are recorded here. The format follows
   when chosen.
 - Yes/no questions name their default after the hint, for example `[Y/n] (default: yes)`. "Launch now?" at the
   end of setup defaults to no, so Enter alone never starts a server.
+- The context screen shows this machine's memory (total, the system's share, what is usable, the plan's limit,
+  the 15% reserve and what is free right now) and the model weights, then per context the memory it adds on top
+  (KV cache and compute buffers), the total, three memory columns and a verdict: recommended, fits, stretch or too
+  big. Plan left is the room before the reserve, Reserve used is how much of the reserve a setting takes ("none",
+  "5.5 of 17.3 GiB", "all 17.3 GiB"), and Free after is what the machine really has left ("1.9 GiB short" when
+  it is too big), so a stretch never shows a negative number. A key under the machine's memory explains them, and
+  the Tested column is left out when every row has the same label, which the key then names. The model
+  lists say yes, stretch or too big in their Fits column, and a model that fits no setting shows its smallest
+  one. Nothing is greyed out: a stretch asks first, and a model or context that needs more memory than the
+  machine has gets a stronger warning and can still be downloaded at your own risk. The summary repeats it.
+- Vision projectors are recognised whatever their name (`Model.mmproj-Q8_0.gguf`, `Model-mmproj-F16.gguf`,
+  `Model.BF16-mmproj.gguf`), not only when the name starts with "mmproj". Before, such a file counted as a model;
+  the catalog often read a repo's header from it and then hid the whole repo, and vision was missing. The shipped
+  catalog lists 45 more repos (2,590 usable files instead of 2,222), among them mradermacher's 9B, 35B-A3B and
+  122B, prithivMLmods' 122B MTP and NVFP4 builds and vultr's 9B, 35B-A3B and 397B, and 45 more repos have vision.
+  Headers are no longer read from projectors or MTP heads, a catalog refresh re-reads any that were, and the
+  quick search for models on disk no longer lists such a projector as a model.
+- For small machines: a 32k context option. 32k is only suggested first when no longer context fits, since coding
+  agents' own instructions fill much of it, and the context screen says so.
+- A "best for small memory" sort that weighs everything at once: memory left (30%), quant quality by bits per
+  weight (25%), model size (15%), context (10%), popularity from downloads and likes (10%) and trust from source,
+  testing and version (10%). Each model shows its highest-scoring setting, and each row's note gives the score and
+  its parts, labelled as a heuristic, not measured.
+- In the full screen, typed answers (a model path, search, port, folder, "I understand") and yes/no questions are
+  read key by key, so Esc acts at once instead of printing ^[ and waiting for Enter: it goes back where there is
+  a step to go back to, keeps the old value for a search or the port, and answers no to a yes/no question.
+  Backspace deletes, Ctrl+U clears the line, and a long answer scrolls in its line. Menus of letters only (such
+  as the first menu when no models were found) take one key press without Enter. Non-ASCII characters in a path
+  are read whole. `launch` and `remove` use the same prompter as setup.
+- Esc on the models folder screen goes back to the settings, and Esc on the summary goes back to the folder
+  screen, keeping every choice. Before, the only way out after the settings was "Go ahead? No", which ended
+  setup.
+- Quitting (q, or Esc where a menu has no Back) clears the full screen first, so only the closing message is
+  left, such as what was kept. Every quit goes through one function; a quit no command handled ends with
+  "Stopped. Nothing was changed." instead of an error. Plain menus (pipes, SSH, `--plain`) are not cleared.
+- Lists redraw at the new size soon after the window is resized, and list rows are cut at the terminal's edge
+  in the plain screens too, so long rows never wrap and pull the columns apart. Columns are measured in terminal
+  columns, so wide (CJK) characters, tabs or newlines in a name cannot push a column out of line, and the notes
+  under a plain list stand apart from the table.
+- `scan --full` uses the setup lists' wording in its Fits column (yes, stretch or too big, with a key under the
+  table) instead of yes or no, and a suggestion that only fits once other apps close says so.
 - Uninstall lists the coding-tool settings it removes with a setup: the OpenCode model entry (with the file it is
   in) and the Claude Code wrapper, both in the parts to pick and on the confirmation screen.
 - The server window shows the server's own log as it comes, between status lines every 15 s, leaving out the

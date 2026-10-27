@@ -58,6 +58,12 @@ The launcher never runs `sudo` itself; it prints the command for you.
 - Ctrl+click (Cmd+click on macOS) a model name to open its Hugging Face card. Konsole only follows links outside
   full-screen lists, so the highlighted model's URL is printed under the list for you to Ctrl+click instead.
 - Use `--plain` for numbered menus if the full-screen list draws badly in your terminal.
+- In the model lists and on the context screen, "stretch" means the setting fits only by using part of the 15% of
+  memory the launcher keeps free, or only after other apps close; it can slow down or fail under load. "Too big"
+  means it needs more memory than the machine has after the system's own use: it will most likely not load. Both
+  can still be chosen after a warning (too big at your own risk, for example to move the model to a bigger
+  machine later). Pick a shorter context, or a smaller quant in the list. All memory figures are estimates
+  (ESTIMATED or INFERRED in the Tested column).
 
 ## Uninstall
 

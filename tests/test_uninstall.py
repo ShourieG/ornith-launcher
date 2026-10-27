@@ -170,7 +170,7 @@ class UninstallTest(unittest.TestCase):
 
         self.only_found()
         forget(self.app.paths, "images", IMAGE)
-        self.uninstall("1", "1", "b", "b", "b")
+        self.uninstall("1", "1", "esc", "esc", "esc")
         self.assertIn("already on this machine before ornith-launcher", self.out.getvalue())
 
     def test_a_model_found_elsewhere_is_listed_as_kept(self):

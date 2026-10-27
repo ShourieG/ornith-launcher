@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ornith_launcher.catalog.catalog import is_projector
 from ornith_launcher.config import Paths, atomic_write_json, read_json
 from ornith_launcher.installed import load_installed
 from ornith_launcher.profiles import list_profiles, load_profile
@@ -45,7 +46,7 @@ class Unfinished:
     @property
     def model_name(self) -> str:
         """The model's file name (not the vision projector's), for lists."""
-        names = [n for n in self.names if not n.lower().startswith("mmproj")]
+        names = [n for n in self.names if not is_projector(n)]
         return (names or self.names)[0]
 
     def files(self) -> list[Path]:

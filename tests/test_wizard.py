@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from ornith_launcher.catalog.catalog import save_catalog
 from ornith_launcher.config import resolve_paths
 from ornith_launcher.folders import check_models_folder, cloud_service, hidden_notice, read_mounts
 from ornith_launcher.settings import Settings, load_settings, save_settings
+from ornith_launcher.system.memory import Pool, PoolKind
 from ornith_launcher.ui.prompts import Cancelled, Choice, PlainPrompter
 from ornith_launcher.ui.tui import click_hint, render_list, supports_full_screen
 from ornith_launcher.wizard import (
@@ -122,7 +124,7 @@ class WizardTest(unittest.TestCase):
         self.assertIn("This folder is hidden", text)
         self.assertIn("No Ornith models found in the usual places.", text)
         # Each file says what it is for; the vision file can be left out in the settings.
-        self.assertIn("Vision:             on: adds a 0.8 GiB vision file so the model", text)
+        self.assertRegex(text, r"Vision\s+on: adds a 0\.8 GiB vision file so the model")
         self.assertIn("(model 35.2 GiB + vision file 0.8 GiB, about", text)
         self.assertIn(f"Downloading 2 files, 36.0 GiB in all, into {folder}\n", text)
         self.assertIn(
@@ -196,12 +198,12 @@ class WizardTest(unittest.TestCase):
             "",  # accept the disclaimer
             "d",  # browse and download
             "",  # the top suggestion
-            "2",  # 128k context
-            "n",  # change the settings
-            "",  # KV cache: default
-            "n",  # 1 parallel request
-            "",  # vision: as it was
-            "18450",  # port
+            "3",  # 128k context
+            "3",  # settings: parallel requests
+            "2",  # 1 slot
+            "5",  # port
+            "18450",
+            "6",  # continue with these settings
             "",  # keep the models folder
             "",  # go ahead
             "",  # paused: keep it
@@ -264,11 +266,9 @@ class WizardTest(unittest.TestCase):
             "d",  # browse and download
             "",  # the top suggestion
             "",  # its context
-            "n",  # change the settings
-            "",  # KV cache: default
-            "",  # 4 parallel requests
-            "n",  # vision off
-            "",  # port
+            "4",  # settings: vision
+            "2",  # off
+            "6",  # continue with these settings
             "",  # keep the models folder
             "",  # go ahead
         ]
@@ -278,7 +278,11 @@ class WizardTest(unittest.TestCase):
         wizard.prompter.read_line = lambda prompt: prompts.append(prompt) or read_line(prompt)
         selection = wizard.run()
         text = self.out.getvalue()
-        self.assertIn("Turn vision (image input) on? It adds a 0.8 GiB download.", "".join(prompts))
+        self.assertRegex(
+            text, r"on\s+46\.7 GiB\s+yes\s+69\.8 GiB\s+reads images; adds a 0\.8 GiB vision file"
+        )
+        self.assertRegex(text, r"off\s+45\.8 GiB\s+yes\s+70\.6 GiB\s+text only")
+        self.assertIn("Settings for Ornith 1.5 35B-A3B Q8_0:", text)
         self.assertIn("Downloading 1 file, 35.2 GiB in all", text)
         self.assertNotIn("Vision file", text)
         self.assertIsNone(selection.mmproj_path)
@@ -330,7 +334,7 @@ class WizardTest(unittest.TestCase):
         models = self.home / ".ornith-launcher" / "models"
         self.stopped_download(models / "gone-uploader" / "Removed-Repo-GGUF@1234567", "x.gguf")
         with self.assertRaises(Cancelled):
-            self.wizard(["r", "1", "b", "q"]).run()
+            self.wizard(["r", "1", "esc", "q"]).run()
         text = self.out.getvalue()
         self.assertIn("is no longer in the model list", text)
         self.assertIn("Remove it with u, Uninstall.", text)
@@ -390,25 +394,23 @@ class WizardTest(unittest.TestCase):
 
         with mock.patch.object(PlainPrompter, "choose", record):
             with self.assertRaises(Cancelled):
-                # disclaimer, browse, only uncensored, decline, again, accept, quit
-                self.wizard(["", "d", "o", "n", "o", "y", "q"]).run()
+                # disclaimer, browse, all models, filters, uncensored, only: decline, then
+                # again and accept, back to the list, quit
+                answers = ["", "d", "a", "f", "11", "3", "n", "11", "3", "y", "esc", "q"]
+                self.wizard(answers).run()
         titles = [title for title, _, _ in shown]
-        self.assertEqual(titles[1:3], ["Suggested for this machine:"] * 2)  # declined: no list
-        title, notice, choices = shown[3]
-        self.assertTrue(title.startswith("Uncensored models only ("))
+        self.assertEqual(titles.count("Uncensored models:"), 2)
+        self.assertTrue(titles[-2].startswith("Filters ("))
+        self.assertEqual(shown[-2][2][10].cells, ("Uncensored", "only uncensored"))
+        title, notice, choices = shown[-1]
+        self.assertTrue(title.startswith("All models ("))
+        self.assertIn("Filters: only uncensored.", notice)
         self.assertIn("You alone are responsible", notice)
         self.assertIn("can miss some or include others", notice)
-        self.assertIn("You alone are responsible", self.out.getvalue())
         self.assertTrue(choices)
         plan = self.wizard([]).system_check()
-        uncensored = {
-            (c.entry.repo.id, c.entry.file.path)
-            for c in plan.ranked
-            if c.entry.classification.uncensored
-        }
-        self.assertTrue(
-            all(c.link.split("huggingface.co/")[1] in {r for r, _ in uncensored} for c in choices)
-        )
+        uncensored = {c.entry.repo.id for c in plan.ranked if c.entry.classification.uncensored}
+        self.assertTrue(all(c.link.split("huggingface.co/")[1] in uncensored for c in choices))
         self.assertTrue(load_settings(self.app.paths).show_uncensored)
         self.assertIn("in later runs too, until you hide them again", self.out.getvalue())
 
@@ -416,8 +418,7 @@ class WizardTest(unittest.TestCase):
         save_settings(self.app.paths, Settings(disclaimer_version=99, show_uncensored=True))
         titles, _ = self.walk(["d", "a", "q"])
         self.assertIn("Suggested for this machine (uncensored shown):", titles)
-        all_models = [t for t in titles if t.startswith("All models (")]
-        self.assertIn(", uncensored shown;", all_models[0])
+        self.assertIn("Filters: uncensored shown. Search: none.", self.out.getvalue())
 
     def walk(self, answers, **kwargs):
         """Run the wizard; returns (titles of every menu shown, selection or None if quit)."""
@@ -435,18 +436,18 @@ class WizardTest(unittest.TestCase):
                 return titles, None
 
     def test_back_from_the_context_step_returns_to_the_same_list(self):
-        # disclaimer, browse, all models, sort, by likes, first row, back, first row again
-        titles, selection = self.walk(["", "d", "a", "s", "6", "1", "b", "1", "", "", "", ""])
+        # disclaimer, browse, best fit list, sort, by likes, first row, back, first row again
+        titles, selection = self.walk(["", "d", "b", "s", "9", "1", "esc", "1", "", "", "", ""])
         self.assertIsNotNone(selection)
         context = "Context size (the longest prompt the model can read at once):"
         index = titles.index(context)
-        self.assertTrue(titles[index - 1].startswith("All models ("))
+        self.assertTrue(titles[index - 1].startswith("Best fit for this machine ("))
         self.assertIn("likes, most first", titles[index + 1])  # same list, same order
         self.assertEqual(titles[index + 2], context)
 
     def test_main_menu_and_back_lead_to_the_first_menu(self):
-        # browse, all models, first row, main menu, browse, back (suggested -> first menu), quit
-        titles, _ = self.walk(["", "d", "a", "1", "m", "d", "b", "q"])
+        # browse, best fit list, first row, main menu, browse, back (to the first menu), quit
+        titles, _ = self.walk(["", "d", "b", "1", "m", "d", "esc", "q"])
         self.assertEqual(titles.count("What next?"), 3)
         self.assertEqual(titles[-1], "What next?")
         after_main = titles[titles.index("What next?", 1) + 1]
@@ -459,7 +460,7 @@ class WizardTest(unittest.TestCase):
         settings = Settings(disclaimer_version=disclaimer_text()[0])
         save_settings(self.app.paths, settings)
         fake_model(self.home / "models" / "my-ornith.gguf", "9B", name="Ornith 1.5 9B")
-        titles, _ = self.walk(["1", "y", "b", "q"])
+        titles, _ = self.walk(["1", "y", "esc", "q"])
         found = "Ornith models found on this machine (used where they are, never moved):"
         self.assertEqual(titles, [found, titles[1], found])
 
@@ -467,7 +468,7 @@ class WizardTest(unittest.TestCase):
         save_settings(self.app.paths, Settings(disclaimer_version=disclaimer_text()[0]))
         folder = self.home / "elsewhere"
         fake_model(folder / "Ornith-1.0-9B-Q8_0.gguf", "9B")
-        titles, _ = self.walk(["y", "b", "q"], model_path=folder)
+        titles, _ = self.walk(["y", "\x1b", "q"], model_path=folder)  # Esc typed into the line
         # Back shows the first menu (which now lists the remembered folder's model),
         # not the same model's context step again.
         self.assertEqual(len(titles), 2)
@@ -484,9 +485,7 @@ class WizardTest(unittest.TestCase):
 
         with mock.patch.object(PlainPrompter, "new_screen", record):
             self.wizard(["", "d", "", "", "", "", ""]).run()
-        self.assertEqual(
-            screens, ["Checking this machine...", "Settings", "Models folder", "Summary"]
-        )
+        self.assertEqual(screens, ["Checking this machine...", "Models folder", "Summary"])
 
     def test_uninstall_is_offered_only_when_the_launcher_installed_something(self):
         titles, _ = self.walk(["", "q"])
@@ -496,7 +495,7 @@ class WizardTest(unittest.TestCase):
         record(self.app.paths, "shortcuts", str(self.home / "Desktop" / "x.desktop"))
         self.out.truncate(0)
         # first menu, uninstall, back from the uninstall menu, first menu again, quit
-        titles, _ = self.walk(["u", "b", "q"])
+        titles, _ = self.walk(["u", "esc", "q"])
         self.assertIn("Uninstall or remove setups", self.out.getvalue())
         self.assertEqual(titles, ["What next?", "Uninstall", "What next?"])
 
@@ -513,7 +512,7 @@ class WizardTest(unittest.TestCase):
         save_profile(self.app.paths, profile(self.home, name="ready"))
         save_settings(self.app.paths, Settings(disclaimer_version=99, default_profile="ready"))
         # launch list, broken (not available), back to the first menu, launch list, ready
-        answers = iter(["l", "1", "b", "l", "2"])
+        answers = iter(["l", "1", "esc", "l", "2"])
 
         def read_line(prompt):
             try:
@@ -544,7 +543,7 @@ class WizardTest(unittest.TestCase):
         folder = self.home / "elsewhere"
         model = fake_model(folder / "Ornith-1.0-9B-Q8_0.gguf", "9B")
         # An empty answer asks again and b goes back to the menu, then the path is given.
-        answers = ["p", "", "b", "p", str(folder), "y", "", "", ""]
+        answers = ["p", "", "esc", "p", str(folder), "y", "", "", ""]
         selection = self.wizard(answers).run()
         self.assertEqual(selection.model_paths, [model.resolve()])
         self.assertRegex(self.out.getvalue(), r"Custom model path +p\n")
@@ -562,10 +561,10 @@ class WizardTest(unittest.TestCase):
         selection = Selection(entry=uncensored.entry, candidate=uncensored)
         self.assertTrue(typed._consents(selection))
         self.assertIn("uncensored_ack", selection.consents)
-        # A wrong answer or a bare Enter asks again; only b goes back.
-        wrong = self.wizard(["ok", "", "b"])
+        # A wrong answer or a bare Enter asks again; only Esc goes back.
+        wrong = self.wizard(["ok", "", "b", "\x1b"])
         self.assertFalse(wrong._consents(Selection(entry=uncensored.entry, candidate=uncensored)))
-        self.assertEqual(self.out.getvalue().count("(quotes are optional) to continue, or b"), 2)
+        self.assertEqual(self.out.getvalue().count("(quotes are optional) to continue, or Esc"), 3)
         for typed_text in ('"I understand"', "\u201ci understand\u201d", "  I   UNDERSTAND "):
             quoted = self.wizard([typed_text])
             self.assertTrue(
@@ -598,6 +597,349 @@ class WizardTest(unittest.TestCase):
         self.assertIn("please enter another one", self.out.getvalue())
         self.assertEqual(selection.models_dir, good)
         self.assertEqual(load_settings(self.app.paths).models_dir, str(good))
+
+    def test_the_context_screen_shows_memory_and_asks_before_a_stretch(self):
+        answers = [
+            "",  # accept the disclaimer
+            "d",  # browse and download
+            "3",  # the 122B suggestion
+            "6",  # 1M context: a stretch on this machine
+            "n",  # not that one
+            "",  # the recommended one
+            "",  # default settings
+            "",  # keep the models folder
+            "",  # go ahead
+        ]
+        wizard = self.wizard(answers)
+        prompts = []
+        read_line = wizard.prompter.read_line
+        wizard.prompter.read_line = lambda prompt: prompts.append(prompt) or read_line(prompt)
+        selection = wizard.run()
+        self.assertEqual(selection.entry.repo.id, "ornith-ai/Ornith-1.5-122B-GGUF")
+        self.assertEqual(selection.candidate.context, 262144)
+        text = self.out.getvalue()
+        self.assertIn("so 116.5 GiB is usable", text)
+        self.assertIn("Setup plans up to 99.0 GiB and keeps 17.5 GiB (15%) in reserve", text)
+        self.assertIn("The model weights take 70.6 GiB, plus 0.8 GiB for the vision file;", text)
+        self.assertIn("\nPlan left: room before the reserve.", text)  # the key on its own line
+        self.assertIn("All memory figures here are ESTIMATED.", text)
+        header = "Context memory  Total      Plan left  Reserve used     Free after  Verdict\n"
+        self.assertIn(header, text)  # no Tested column when every row says the same
+        self.assertRegex(
+            text,
+            r"262k \(native\)\s+12\.2 GiB\s+83\.7 GiB\s+15\.3 GiB\s+none\s+32\.8 GiB\s+recommended",
+        )
+        self.assertRegex(
+            text,
+            r"1M\s+33\.8 GiB\s+105\.2 GiB\s+0\.0 GiB\s+6\.2 of 17\.5 GiB\s+11\.2 GiB\s+stretch",
+        )
+        self.assertIn("A stretch for this machine", text)
+        self.assertIn(
+            "Warning: Ornith 1.5 122B Q4_K_M at 1M context needs 105.2 GiB, 6.2 GiB", text
+        )
+        asked = [p for p in prompts if "Use it anyway?" in p]
+        self.assertEqual(asked, ["Use it anyway? [y/N] (default: no) "])
+        self.assertEqual(text.count("Context size (the longest prompt"), 2)  # shown again
+
+    def test_the_context_screen_keeps_the_tested_column_when_rows_differ(self):
+        wizard = self.wizard(["", "d", "1"])  # the 35B Q8_0, tested at 1M on this machine
+        with self.assertRaises(Cancelled):
+            wizard.run()
+        text = self.out.getvalue()
+        self.assertRegex(text, r"Free after\s+Verdict\s+Tested\n")
+        self.assertRegex(text, r"1M\s.*fits\s+TESTED")
+        self.assertNotIn("All memory figures here are", text)
+
+    def test_too_big_is_shown_and_can_be_chosen_at_your_own_risk(self):
+        from ornith_launcher.browse import recommended
+        from ornith_launcher.planner.rank import Filters, Fit
+
+        wizard = self.wizard(["", "y"])  # no at first, then yes
+        plan = wizard.system_check()
+        too_big = [c for c in recommended(plan.ranked).values() if c.fit is Fit.TOO_BIG]
+        self.assertTrue(too_big)
+        big = too_big[0]
+        # A pick starts from the file's smallest setting, so the verdict is its best case.
+        listed = Filters(show_uncensored=False)  # the list's own filters
+        same_file = [
+            c
+            for c in plan.ranked
+            if c.entry.file.path == big.entry.file.path and listed.accepts(c) and c.vision
+        ]
+        self.assertTrue(big.vision)  # as the ranking prefers it, so the next screens match
+        self.assertEqual(big.estimate.total, min(c.estimate.total for c in same_file))
+        self.assertIn("too big", wizard._cells(big))
+        selection = mock.Mock(accepted_fit=Fit.FITS)
+        self.assertFalse(wizard._accept_fit(selection, big))  # Enter: no
+        self.assertTrue(wizard._accept_fit(selection, big))
+        self.assertIs(selection.accepted_fit, Fit.TOO_BIG)
+        self.assertTrue(wizard._accept_fit(selection, big))  # accepted once, not asked again
+        text = self.out.getvalue()
+        self.assertEqual(text.count("Too big for this machine"), 2)
+        self.assertIn("at your own risk", text)
+        self.assertIn("most likely fail to load", text)
+
+    def test_picking_a_too_big_file_in_all_models_warns_first(self):
+        # disclaimer, browse, all models, the 397B Q8_0 at the top: decline, then quit
+        wizard = self.wizard(["", "d", "a", "1", "", "q"])
+        prompts = []
+        read_line = wizard.prompter.read_line
+        wizard.prompter.read_line = lambda prompt: prompts.append(prompt) or read_line(prompt)
+        with self.assertRaises(Cancelled):
+            wizard.run()
+        text = self.out.getvalue()
+        self.assertIn("Too big for this machine", text)
+        self.assertIn("Warning: Ornith 1.5 397B Q8_0 at 32k context needs", text)
+        self.assertIn("Download it anyway, at your own risk? [y/N] (default: no) ", prompts)
+        self.assertTrue(text.rstrip().endswith("Quit                      q"))  # same list again
+        self.assertEqual(text.count("All models (21 files;"), 2)
+
+    def test_a_pick_in_all_models_starts_from_the_recommended_setting(self):
+        # disclaimer, browse, all models, row 8 (the 1.5 35B-A3B Q8_0, shown at 32k), then
+        # Enter on the context screen and the defaults after it
+        titles, selection = self.walk(["", "d", "a", "8", "", "", "", ""])
+        text = self.out.getvalue()
+        self.assertRegex(text, r"8\s+Ornith 1\.5 35B-A3B\s+official\s+mit\s+Q8_0\s+40\.0 GiB")
+        self.assertIn("Context size (the longest prompt the model can read at once):", titles)
+        # Enter takes the recommended setting (262k, vision on), not the row's 32k.
+        self.assertEqual(selection.candidate.context, 262144)
+        self.assertTrue(selection.candidate.vision)
+
+    def test_quitting_clears_the_full_screen_then_says_what_was_kept(self):
+        from contextlib import nullcontext
+        from dataclasses import replace
+
+        from ornith_launcher.ui import tui
+        from ornith_launcher.ui.tui import CLEAR
+
+        save_settings(self.app.paths, Settings(disclaimer_version=99))
+        for full, cleared in ((True, True), (False, False)):
+            out = io.StringIO()
+            app = replace(self.app, out=out, full_screen=full, read_line=lambda prompt: "q")
+            # The full screen reads one key at a time; q quits from the first menu.
+            with mock.patch.object(tui, "read_key", lambda timeout=None: "q"):
+                with mock.patch.object(tui, "raw_keys", nullcontext):
+                    self.assertEqual(cli.main(["setup"], app=app), 1)
+            text = out.getvalue()
+            self.assertIn("Setup stopped. Nothing else was changed;", text)
+            self.assertEqual(CLEAR in text, cleared)
+            if cleared:  # the message comes after the clear, on an empty screen
+                self.assertLess(text.rindex(CLEAR), text.index("Setup stopped."))
+
+    def test_a_quit_no_command_handles_ends_cleanly(self):
+        from dataclasses import replace
+
+        from ornith_launcher.ui.prompts import Cancelled
+
+        out = io.StringIO()
+        app = replace(self.app, out=out)
+        with mock.patch.object(cli.scan, "run", side_effect=Cancelled()):
+            self.assertEqual(cli.main(["scan"], app=app), 1)
+        self.assertEqual(out.getvalue(), "\nStopped. Nothing was changed.\n")
+
+    def test_esc_before_the_download_goes_back_one_step_at_a_time(self):
+        # suggestion, context, continue; folder: keep; summary: Esc (to the folder), Esc (to
+        # the settings, not the context screen), continue; keep the folder; go ahead
+        answers = ["", "d", "1", "", "", "", "esc", "esc", "", "", ""]
+        titles, selection = self.walk(answers)
+        self.assertIsNotNone(selection)
+        text = self.out.getvalue()
+        self.assertEqual(text.count("\nModels folder\n"), 3)
+        self.assertEqual(text.count("\nSummary\n"), 2)
+        context = "Context size (the longest prompt the model can read at once):"
+        self.assertEqual(titles.count(context), 1)  # Esc led to the settings menu itself
+        self.assertEqual(len([t for t in titles if t.startswith("Settings for ")]), 2)
+        prompts = []
+        PlainPrompter(read_line=lambda p: prompts.append(p) or "", out=io.StringIO()).confirm(
+            "Go ahead?", back=True
+        )
+        self.assertEqual(prompts, ["Go ahead? [Y/n] (default: yes; Esc to go back) "])
+
+    def test_esc_keeps_the_search(self):
+        # all models, search 397B, search again but Esc, quit
+        titles, _ = self.walk(["", "d", "a", "/", "397B", "/", "esc", "q"])
+        self.assertTrue(titles[-1].startswith("All models (4 of 21 files;"))
+
+    def test_settings_is_a_menu_that_never_moves_on_by_itself(self):
+        # browse, the top suggestion, its context; settings: KV cache, q8_0 (a fit, no question),
+        # parallel requests, 1; then continue
+        answers = ["", "d", "1", "", "2", "2", "3", "2", "6", "", "", "", ""]
+        titles, selection = self.walk(answers)
+        settings = [t for t in titles if t.startswith("Settings for ")]
+        self.assertEqual(len(settings), 3)  # shown again after each change
+        self.assertEqual((selection.candidate.kv_type, selection.candidate.slots), ("q8_0", 1))
+        text = self.out.getvalue()
+        self.assertNotIn("Use these settings?", text)
+        self.assertIn("KV cache (memory for the conversation so far):", titles)
+        self.assertRegex(text, r"q8_0\s+\d+\.\d GiB\s+yes\s+\d+\.\d GiB\s+about half the KV")
+        self.assertRegex(text, r"KV cache\s+q8_0 \(UNTESTED with Ornith\)")
+        self.assertIn("Memory with these settings: ", text)
+        # Continue is last, below a blank line, and outside the columns.
+        self.assertRegex(text, r"5  Port\s+18400\n\n6  Continue with these settings\n")
+        self.assertRegex(text, r"\n1  Context            262k")
+
+    def test_esc_or_context_on_settings_returns_to_the_context_screen(self):
+        context = "Context size (the longest prompt the model can read at once):"
+        # Esc on settings, Enter on the context screen; then the Context row, 128k; continue
+        answers = ["", "d", "1", "", "esc", "", "1", "3", "6", "", "", ""]
+        titles, selection = self.walk(answers)
+        self.assertEqual(titles.count(context), 3)
+        self.assertEqual(selection.candidate.context, 131072)
+        after = titles[titles.index(context, titles.index(context) + 1) + 1]
+        self.assertTrue(after.startswith("Settings for "))
+
+    def test_the_port_must_be_a_free_port_in_range(self):
+        import socket
+
+        with socket.socket() as busy:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen()
+            taken = busy.getsockname()[1]
+            # settings: port 80 (refused), port <taken> (refused), port 18555; continue
+            answers = ["", "d", "1", "", "5", "80", "5", str(taken), "5", "18555", "6"]
+            _, selection = self.walk([*answers, "", "", ""], port=None)
+        text = self.out.getvalue()
+        self.assertIn("'80' is not a port from 1024 to 65535; keeping", text)
+        self.assertIn(f"Port {taken} is in use; keeping", text)
+        self.assertEqual(selection.port, 18555)
+
+    def test_pickers_apply_at_once_and_say_what_matches(self):
+        # best fit, filters, source: community only (Enter applies and leaves), then
+        # likes: c clears it to any; size: tick 9B, see the count, Esc; back, quit
+        answers = ["", "d", "b", "f", "4", "3", "8", "c", "1", "1", "esc", "esc", "q"]
+        titles, _ = self.walk(answers)
+        text = self.out.getvalue()
+        self.assertIn("Showing: 9B; 1 file matches, 1 fit this machine.", text)
+        self.assertIn("Clear (any size)  c", text)
+        self.assertNotIn("Done  d", text)
+        self.assertIn("Filters: size 9B; community only. Search: none.", text)
+
+    def test_b_and_a_switch_lists_and_esc_returns_to_suggested(self):
+        # browse, best fit list (b), All models (a), best fit list (b), back, quit
+        titles, _ = self.walk(["", "d", "b", "a", "b", "esc", "q"])
+        lists = [t.split(" (")[0] for t in titles[1:]]
+        self.assertEqual(
+            lists,
+            ["Suggested for this machine:", "Best fit for this machine", "All models",
+             "Best fit for this machine", "Suggested for this machine:"],
+        )  # fmt: skip
+        self.assertIn("Best fit list  b", self.out.getvalue())
+        self.assertIn("Back           Esc", self.out.getvalue())
+        self.assertIn(
+            "3 more files are too big for this machine: a shows them", self.out.getvalue()
+        )
+
+    def test_a_search_narrows_both_lists_and_never_reorders(self):
+        # browse, search from Suggested (opens All models), b for the best fit list, quit
+        titles, _ = self.walk(["", "d", "/", "397B", "b", "q"])
+        self.assertTrue(titles[2].startswith("All models (4 of 21 files;"))
+        self.assertTrue(titles[3].startswith("Best fit for this machine (2 files;"))
+        text = self.out.getvalue()
+        listing = text[
+            text.index("All models (4 of 21") : text.index("Best fit for this machine (2")
+        ]
+        quants = re.findall(r"^\d\s+Ornith 1\.5 397B\s+\w+\s+mit\s+(\S+)", listing, re.M)
+        self.assertEqual(quants, ["Q8_0", "Q4_K_M", "IQ2_XXS", "IQ1_S"])  # finest first, fit or not
+        self.assertIn("Search: 397B.", text)
+        self.assertIn("2 more files are too big for this machine", text)
+
+    def test_filters_narrow_the_lists_and_clear_with_c(self):
+        # browse, best fit, filters, size, 35B and 122B, done, back, clear, quit
+        # Each tick applies at once; Esc leaves the picker with them kept.
+        titles, _ = self.walk(["", "d", "b", "f", "1", "2", "3", "esc", "esc", "c", "q"])
+        self.assertTrue(titles[-2].startswith("Best fit for this machine (8 files;"))
+        self.assertTrue(titles[-1].startswith("Best fit for this machine (18 files;"))
+        text = self.out.getvalue()
+        self.assertIn("Filters (9 files match; 8 of them fit this machine):", text)
+        self.assertIn("Filters: size 35B or 122B. Search: none.", text)
+        self.assertIn("1 more file is too big for this machine: a shows it", text)
+        self.assertRegex(text, r"2\s+\[x\] 35B\s+7")
+
+    def test_version_and_quant_pickers_tick_and_c_clears(self):
+        # best fit, filters, version: tick 1.0, back; quant: tick 8 bits, clear, tick 16 bits,
+        # back; back to the list, quit
+        answers = ["", "d", "b", "f", "2", "2", "esc", "3", "2", "c", "1", "esc", "esc", "q"]
+        titles, _ = self.walk(answers)
+        text = self.out.getvalue()
+        self.assertIn("Version (Enter ticks or unticks; nothing ticked means any version):", titles)
+        self.assertRegex(text, r"1\s+\[ \] 1\.5\s+\d+\n2\s+\[x\] 1\.0")
+        self.assertIn("Filters: version 1.0; 16 bits. Search: none.", text)
+        self.assertTrue(titles[-1].startswith("Best fit for this machine (0 files;"))
+        self.assertIn("Nothing matches the search and filters. Press c to clear them.", text)
+
+    def test_filters_last_until_setup_ends(self):
+        # browse, best fit, filters, source, community only, back, main menu, browse, best fit
+        titles, _ = self.walk(["", "d", "b", "f", "4", "3", "esc", "m", "d", "b", "q"])
+        self.assertEqual(titles.count("What next?"), 2)
+        self.assertTrue(titles[-1].startswith("Best fit for this machine (3 files;"))
+        self.assertIn("Filters: community only. Search: none.", self.out.getvalue())
+
+    def test_nothing_that_fits_says_where_the_matches_are(self):
+        titles, _ = self.walk(["", "d", "/", "397B Q8_0", "b", "q"])
+        self.assertTrue(titles[-1].startswith("Best fit for this machine (0 files;"))
+        self.assertIn(
+            "Nothing that fits this machine matches. 1 file matches in All models (too big): "
+            "press a.",
+            self.out.getvalue(),
+        )
+
+    def test_every_list_row_can_be_picked_and_says_how_it_fits(self):
+        import datetime
+
+        from ornith_launcher.browse import ListFilters, build_lists
+
+        wizard = self.wizard([])
+        plan = wizard.system_check()
+        lists = build_lists(plan.ranked, ListFilters(), "", datetime.date(2026, 10, 27))
+        fit_labels = {wizard._cells(c)[7] for c in lists.best_fit}
+        all_labels = {wizard._cells(c, lightest=True)[6] for c in lists.all_models}
+        self.assertEqual(fit_labels, {"yes", "stretch"})  # never too big in the best fit list
+        self.assertEqual(all_labels, {"yes", "stretch", "too big"})
+        self.assertEqual(len(lists.all_models) - len(lists.best_fit), lists.too_big)
+        self.assertTrue(all(c.context == 32768 and not c.vision for c in lists.all_models))
+
+    def test_best_for_small_memory_lists_rows_by_their_combined_score(self):
+        import re
+
+        from ornith_launcher.browse import BEST_FIT_SORTS, highest_scoring, sort_rows
+        from ornith_launcher.planner.score import Scorer
+
+        position = next(i for i, s in enumerate(BEST_FIT_SORTS) if s.by == "score")
+        try:  # disclaimer, browse, best fit list, sort, this one, then quit
+            self.wizard(["", "d", "b", "s", str(position + 1), "q"]).run()
+        except Cancelled:
+            pass
+        text = self.out.getvalue()
+        self.assertIn("best for small memory, a combined score; page 1):", text)
+        scores = [int(n) for n in re.findall(r"Score\s+(\d+): memory", text)]
+        self.assertTrue(scores)
+        self.assertIn("(a heuristic, not measured)", " ".join(text.split()))  # wrapped notes
+        # Among the rows that fit, the highest score comes first.
+        wizard = self.wizard([])
+        plan = wizard.system_check()
+        scorer = Scorer.for_candidates(plan.ranked)
+        picks = highest_scoring(plan.ranked, scorer).values()
+        rows = sort_rows(list(picks), BEST_FIT_SORTS[position], scorer)
+        fitting = [scorer.score(c).total for c in rows if c.fits]
+        self.assertEqual(fitting, sorted(fitting, reverse=True))
+        # Each file shows its highest-scoring setting among those the list offers.
+        from ornith_launcher.planner.rank import Filters
+
+        listed = Filters(show_uncensored=False)
+        top = rows[0]
+        same_file = [
+            c
+            for c in plan.ranked
+            if c.entry.file.path == top.entry.file.path and listed.accepts(c) and c.fits
+        ]
+        best = max(scorer.score(c).total for c in same_file)
+        self.assertAlmostEqual(scorer.score(top).total, best)
+
+    def test_a_32k_context_says_it_is_short_for_coding_agents(self):
+        wizard = self.wizard(["", "d", "", "1", "", "", ""])  # ... the 35B, 32k, defaults
+        selection = wizard.run()
+        self.assertEqual(selection.candidate.context, 32768)
+        self.assertIn("short for coding agents", self.out.getvalue())
 
     def test_a_full_disk_asks_for_another_folder(self):
         save_settings(self.app.paths, Settings(disclaimer_version=99))
@@ -645,6 +987,61 @@ class WizardTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(f"The downloaded model stays in {model.parent}", self.out.getvalue())
         self.assertNotIn("Nothing else was changed", self.out.getvalue())
+
+
+class MemoryColumnsTest(unittest.TestCase):
+    """Plan left, reserve used and free after on the context screen."""
+
+    GIB = 1024**3
+
+    def candidate(self, *needs: tuple[Pool, float]):
+        from types import SimpleNamespace
+
+        from ornith_launcher.planner.memory_model import MemoryEstimate
+        from ornith_launcher.planner.rank import PoolNeed
+
+        estimate = MemoryEstimate(int(60 * self.GIB), 0, 0, 0, 0, 0)
+        return SimpleNamespace(
+            needs=[PoolNeed(pool, int(gib * self.GIB)) for pool, gib in needs], estimate=estimate
+        )
+
+    def setUp(self):
+        # 100 GiB usable after the system's 20 GiB: a plan of 85 GiB and a 15 GiB reserve.
+        self.pool = Pool(PoolKind.UNIFIED, "Unified", 120 * self.GIB, 20 * self.GIB)
+
+    def test_each_kind_of_row(self):
+        from ornith_launcher.wizard import memory_cells
+
+        rows = {
+            "fits": (80, ("5.0 GiB", "none", "20.0 GiB")),
+            "stretch": (90, ("0.0 GiB", "5.0 of 15.0 GiB", "10.0 GiB")),
+            "too big": (103, ("0.0 GiB", "all 15.0 GiB", "3.0 GiB short")),
+        }
+        for kind, (need, cells) in rows.items():
+            with self.subTest(kind):
+                self.assertEqual(memory_cells(self.candidate((self.pool, need))), cells)
+
+    def test_a_split_machine_shows_its_fullest_pool(self):
+        from ornith_launcher.wizard import memory_cells
+
+        vram = Pool(PoolKind.VRAM, "GPU", 24 * self.GIB, 4 * self.GIB)  # 20 usable, 3 in reserve
+        # RAM keeps more GiB in plan, but the GPU is fuller (90% against 50%), so it decides.
+        c = self.candidate((vram, 18), (self.pool, 50))
+        self.assertEqual(memory_cells(c), ("0.0 GiB", "1.0 of 3.0 GiB", "2.0 GiB"))
+
+    def test_the_notice_names_the_reserve_and_a_shared_tested_label(self):
+        from ornith_launcher.planner.rank import Level
+        from ornith_launcher.wizard import memory_notice
+
+        text = memory_notice(self.candidate((self.pool, 80)), Level.ESTIMATED)
+        self.assertIn("Setup plans up to 85.0 GiB and keeps 15.0 GiB (15%) in reserve", text)
+        self.assertTrue(text.endswith("All memory figures here are ESTIMATED."))
+        self.assertNotIn("fullest", text)
+        vram = Pool(PoolKind.VRAM, "GPU", 24 * self.GIB, 4 * self.GIB)
+        split = memory_notice(self.candidate((vram, 18), (self.pool, 50)))
+        self.assertEqual(split.count("in reserve"), 2)  # one line per pool
+        self.assertIn("Each row shows its fullest memory pool.", split)
+        self.assertNotIn("All memory figures", split)
 
 
 class PieceTest(unittest.TestCase):
@@ -755,7 +1152,7 @@ class PieceTest(unittest.TestCase):
         self.assertEqual(
             plain[-8:],
             [
-                "more",
+                "  more",
                 "",
                 "  Actions",
                 "",
@@ -796,11 +1193,15 @@ class PieceTest(unittest.TestCase):
         url = "https://huggingface.co/ornith-ai/x"
         choices = [Choice(("Ornith 1.5 9B",), detail="native", link=url), Choice(("other",))]
         lines = render_list("T", ["Model"], choices, 0, 0, {}, 60, 24, click="hint")
-        self.assertEqual(lines[lines.index("native") + 1], url)
-        # A highlighted row without a link leaves the URL line empty.
-        lines = render_list("T", ["Model"], choices, 1, 0, {}, 60, 24, click="hint")
-        self.assertNotIn(url, lines)
-        self.assertEqual(lines[-9:-7], ["", ""])  # detail, URL
+        plain = [re.sub(r"\x1b\[[0-9]*m", "", line) for line in lines]
+        # The note, a blank line, then "URL - <link>" in full, with URL in bold.
+        at = plain.index("  native")
+        self.assertEqual(plain[at + 1 : at + 3], ["", f"  URL - {url}"])
+        self.assertIn(f"  \x1b[1mURL\x1b[0m - {url}", lines)
+        # A highlighted row without a link leaves the same space empty, so nothing jumps.
+        other = render_list("T", ["Model"], choices, 1, 0, {}, 60, 24, click="hint")
+        self.assertNotIn(f"  URL - {url}", [re.sub(r"\x1b\[[0-9]*m", "", x) for x in other])
+        self.assertEqual(len(other), len(lines))
 
     def test_pages_turn_with_letters_or_arrows(self):
         from contextlib import nullcontext
@@ -823,7 +1224,7 @@ class PieceTest(unittest.TestCase):
         self.assertIn("  Previous page  p or ←", plain)
         self.assertEqual(tui.alternates(False, True, arrows="Up/Down"), {"n": "Right"})
         keys = iter(["left", "right"])  # no previous page, so the left arrow does nothing
-        with mock.patch.object(tui, "read_key", lambda: next(keys)):
+        with mock.patch.object(tui, "read_key", lambda timeout=None: next(keys)):
             with mock.patch.object(tui, "raw_keys", nullcontext):
                 prompter = tui.TuiPrompter(out=io.StringIO())
                 picked = prompter.choose("T", ["N"], [Choice(("x",))], next_page=True)
@@ -842,6 +1243,217 @@ class PieceTest(unittest.TestCase):
             lines = out.getvalue().splitlines()
             self.assertEqual(len(lines) > 1, wrapped)
             self.assertTrue(all(len(line) <= 100 for line in lines) or not wrapped)
+
+    def test_rows_are_cut_to_a_narrow_terminal_instead_of_wrapping(self):
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+
+        cells = ("Ornith 1.5 122B", "103.5 GiB", "5.5 of 17.3 GiB", "1.9 GiB short", "too big")
+        for out, cut in ((Terminal(), True), (io.StringIO(), False)):
+            prompter = PlainPrompter(read_line=lambda prompt: "1", out=out)
+            with mock.patch.dict("os.environ", {"COLUMNS": "40", "LINES": "24"}):
+                prompter.choose(
+                    "T", ["Model", "Total", "Reserve", "Free", "Verdict"], [Choice(cells)]
+                )
+            rows = [line for line in out.getvalue().splitlines() if line.startswith(("#", "1 "))]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(all(len(row) <= 40 for row in rows), cut, rows)
+            self.assertEqual(rows[0].index("Total"), rows[1].index("103.5"))  # still aligned
+
+    def test_wide_and_control_characters_keep_columns_in_line(self):
+        from ornith_launcher.ui.plain import table, text_width
+
+        rows = [
+            ["模型 9B", "Q8_0", "yes"],
+            ["Ornith\t9B\n", "Q4_K_M", "stretch"],
+            ["é", "Q2_K", "no"],
+        ]
+        lines = table(["Model", "Quant", "Fits"], rows).splitlines()
+        # The CJK row takes two columns per character, so count columns, not characters.
+        columns = {
+            text_width(line[: line.index(q)])
+            for line, q in zip(lines[1:], ("Q8_0", "Q4_K_M", "Q2_K"))
+        }
+        self.assertEqual(columns, {text_width(lines[0][: lines[0].index("Quant")])})
+        self.assertNotIn("\t", "".join(lines))
+        self.assertEqual(len(lines), 4)  # the newline in a cell did not add a line
+        cut = table(["Model", "Quant"], [["模型模型模型", "Q8_0"]], max_width=9).splitlines()
+        self.assertTrue(all(text_width(line) <= 9 for line in cut), cut)
+
+    def test_full_screen_rows_line_up_under_the_header_at_any_width(self):
+        from ornith_launcher.ui.plain import text_width
+
+        choices = [
+            Choice(("Ornith 1.5 35B-A3B", "Q8_0", "46.7 GiB", "yes")),
+            Choice(("模型 9B", "Q4_K_M", "5.4 GiB", "stretch")),
+            Choice(("Ornith\t? 9B", "IQ1_S", "104.7 GiB", "too big")),
+        ]
+        for width in (120, 40, 25):
+            lines = render_list(
+                "T", ["Model", "Quant", "Memory", "Fits"], choices, 0, 0, {}, width, 30
+            )
+            plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines]
+            header = next(line for line in plain if line.strip().startswith("Model"))
+            rows = [line for line in plain if line[2:].startswith(("Ornith", "模型"))]
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(text_width(line) <= width for line in plain), width)
+            if "Quant" in header:
+                column = text_width(header[: header.index("Quant")])
+                for line, quant in zip(rows, ("Q8_0", "Q4_K_M", "IQ1_S")):
+                    if quant in line:
+                        self.assertEqual(text_width(line[: line.index(quant)]), column)
+
+    def test_details_wrap_under_bold_labels_and_end_with_the_url(self):
+        from ornith_launcher.ui.prompts import detail_lines
+
+        url = "https://huggingface.co/quant-uploader/Ornith-1.5-397B-GGUF"
+        path = "quant-uploader/Ornith-1.5-397B-GGUF/Ornith-1.5-397B-Q6_K-00001-of-00009.gguf"
+        reason = (
+            "Needs 324.6 GiB; Unified memory (NVIDIA GB10) has 115.0 GiB at most after the "
+            "system's own use"
+        )
+        choice = Choice(("x",), info=(("File", path), ("Too big", reason)), link=url)
+        lines = detail_lines(choice, 50, lambda text: f"*{text}*")
+        self.assertTrue(lines[0].startswith("*File*     quant-uploader/"))
+        too_big = next(i for i, line in enumerate(lines) if line.startswith("*Too big*"))
+        self.assertTrue(lines[too_big + 1].startswith("         ") and lines[too_big + 1].strip())
+        self.assertTrue(all(len(line.replace("*", "")) <= 50 for line in lines[:-1]))
+        self.assertEqual(lines[-2:], ["", f"*URL* - {url}"])  # a blank line, then the full URL
+        plain = detail_lines(Choice(("x",), detail="word " * 30), 40, str)
+        self.assertGreater(len(plain), 1)
+        self.assertEqual(detail_lines(Choice(("x",), link=url), 40, str), [f"URL - {url}"])
+
+    def test_full_screen_details_keep_the_list_still(self):
+        long_info = (("File", "a/" + "b" * 150), ("Too big", "needs 324.6 GiB " * 6))
+        choices = [Choice(("one",), info=long_info, link="https://x/1"), Choice(("two",))]
+        first = render_list("T", ["N"], choices, 0, 0, {}, 60, 40, click="hint")
+        second = render_list("T", ["N"], choices, 1, 0, {}, 60, 40, click="hint")
+        self.assertEqual(len(first), len(second))  # the tallest detail sets the space
+        links = r"\x1b\]8;;[^\x1b]*\x1b\\"  # the name's OSC 8 link takes no columns
+        plain = [re.sub(r"\x1b\[[0-9;]*m", "", re.sub(links, "", line)) for line in first]
+        self.assertIn("  URL - https://x/1", plain)
+        self.assertIn("\x1b[1mToo big\x1b[0m", "".join(first))
+        self.assertTrue(all(len(line) <= 60 for line in plain))
+
+    def test_esc_is_back_in_plain_menus_and_b_is_not(self):
+        from ornith_launcher.ui.prompts import BACK
+
+        for answer in ("\x1b", "esc", "ESC"):
+            prompter = PlainPrompter(read_line=lambda prompt, a=answer: a, out=io.StringIO())
+            self.assertEqual(prompter.choose("T", ["N"], [Choice(("x",))], back=True), BACK)
+        answers = iter(["b", "1"])
+        out = io.StringIO()
+        prompter = PlainPrompter(read_line=lambda prompt: next(answers), out=out)
+        self.assertEqual(prompter.choose("T", ["N"], [Choice(("x",))], back=True), 0)
+        self.assertIn("Please enter 1, or a letter.", out.getvalue())
+        self.assertIn("Back  Esc", out.getvalue())
+
+    def test_an_action_row_is_bold_apart_and_does_not_widen_the_columns(self):
+        choices = [
+            Choice(("Context", "262k")),
+            Choice(("Port", "18400")),
+            Choice(("Continue with these settings", ""), action=True),
+        ]
+        for selected in (0, 2):
+            lines = render_list("T", ["Setting", "Value"], choices, selected, 0, {}, 60, 30)
+            plain = [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in lines]
+            self.assertIn("  Setting  Value", plain)  # sized by the data rows only
+            at = next(i for i, line in enumerate(plain) if "Continue with" in line)
+            self.assertEqual(plain[at - 1], "")
+            self.assertEqual(plain[at - 2].rstrip()[-5:], "18400")
+            self.assertIn("\x1b[1mContinue with these settings", lines[at])
+        self.assertTrue(lines[at].startswith("\x1b[7m> \x1b[1m"))  # highlighted and bold
+
+    def full_screen_keys(self, *keys):
+        """A full-screen prompter that reads ``keys`` one by one, as from the keyboard."""
+        from contextlib import ExitStack, nullcontext
+
+        from ornith_launcher.ui import tui
+
+        pressed = iter(keys)
+        stack = ExitStack()
+        stack.enter_context(mock.patch.object(tui, "read_key", lambda timeout=None: next(pressed)))
+        stack.enter_context(mock.patch.object(tui, "raw_keys", nullcontext))
+        self.addCleanup(stack.close)
+        return tui.TuiPrompter(out=io.StringIO())
+
+    def test_typed_answers_on_the_full_screen_take_esc_at_once(self):
+        from ornith_launcher.ui.prompts import BACK, is_back
+
+        prompter = self.full_screen_keys("~", "/", "m", "x", "backspace", "é", "enter")
+        self.assertEqual(prompter.text("Path"), "~/mé")  # typed, one deleted, UTF-8 kept
+        self.assertTrue(is_back(self.full_screen_keys("a", "esc").text("Path", back=True)))
+        self.assertEqual(self.full_screen_keys("a", "esc").text("Port", "18400"), "18400")
+        self.assertEqual(self.full_screen_keys("x", "\x15", "y", "enter").text("Q"), "y")
+        self.assertFalse(self.full_screen_keys("esc").confirm("Delete these?", default=True))
+        self.assertIsNone(self.full_screen_keys("esc").confirm("Go ahead?", back=True))
+        self.assertFalse(
+            self.full_screen_keys("esc").typed_confirmation("Uncensored.", "I understand")
+        )
+        with self.assertRaises(Cancelled):
+            self.full_screen_keys("eof").text("Path")
+        self.assertEqual(BACK, "esc")
+
+    def test_a_long_answer_scrolls_and_a_long_question_gets_its_own_line(self):
+        from ornith_launcher.ui.tui import _tail
+
+        self.assertEqual(_tail("short", 10), "short")
+        self.assertEqual(_tail("/home/user/models/ornith", 10), "…ls/ornith")  # 10 columns
+        prompter = self.full_screen_keys("y", "enter")
+        with mock.patch("shutil.get_terminal_size", return_value=os.terminal_size((40, 20))):
+            self.assertEqual(
+                prompter.text("A question that is far too long for this narrow window"), "y"
+            )
+        self.assertIn("far too long for this narrow window:\n", prompter.out.getvalue())
+
+    def test_menus_of_actions_take_one_key_without_enter(self):
+        from ornith_launcher.ui.keys import utf8_length
+        from ornith_launcher.ui.prompts import BACK
+
+        keys = {"d": "browse and download", "p": "custom model path"}
+        self.assertEqual(
+            self.full_screen_keys("x", "D").choose("What next?", [], [], keys=keys), "d"
+        )
+        back = self.full_screen_keys("esc").choose("Uninstall", [], [], keys=keys, back=True)
+        self.assertEqual(back, BACK)
+        with self.assertRaises(Cancelled):
+            self.full_screen_keys("esc").choose("What next?", [], [], keys=keys)
+        self.assertEqual([utf8_length(b) for b in (0x41, 0xC3, 0xE2, 0xF0)], [1, 2, 3, 4])
+
+    def test_notices_keep_their_line_breaks(self):
+        from ornith_launcher.ui.tui import notice_lines
+
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+
+        notice = "First part.\n" + "word " * 30 + "\nLast part."
+        lines = notice_lines(notice, 40)
+        self.assertEqual(lines[0], "First part.")
+        self.assertEqual(lines[-1], "Last part.")
+        self.assertTrue(all(len(line) <= 38 for line in lines))
+        for out in (Terminal(), io.StringIO()):
+            PlainPrompter(out=out).paragraph(notice)
+            self.assertTrue(out.getvalue().startswith("First part.\nword "))
+            self.assertTrue(out.getvalue().endswith("\nLast part.\n"))
+
+    def test_a_resized_window_is_drawn_again(self):
+        import os
+        from contextlib import nullcontext
+
+        from ornith_launcher.ui import tui
+
+        sizes = iter([os.terminal_size((100, 30))] * 2 + [os.terminal_size((50, 30))] * 9)
+        keys = iter(["", "", "enter"])  # two quiet polls, the second after the resize
+        out = io.StringIO()
+        with mock.patch.object(tui, "read_key", lambda timeout=None: next(keys)):
+            with mock.patch.object(tui.shutil, "get_terminal_size", lambda fallback: next(sizes)):
+                with mock.patch.object(tui, "raw_keys", nullcontext):
+                    picked = tui.TuiPrompter(out=out).choose("T", ["N"], [Choice(("x",))])
+        self.assertEqual(picked, 0)
+        frames = out.getvalue().split(tui.CLEAR)[1:]
+        self.assertEqual(len(frames), 2)  # the first poll changed nothing, the resize redrew
 
     def test_full_screen_steps_clear_the_screen_but_keep_scrollback(self):
         from ornith_launcher.ui.tui import CLEAR, TuiPrompter
@@ -887,38 +1499,6 @@ class PieceTest(unittest.TestCase):
         for value, text in cases.items():
             self.assertEqual(compact_count(value), text, value)
 
-    def test_sort_orders_keep_fitting_models_first(self):
-        from types import SimpleNamespace
-
-        from ornith_launcher.wizard import SORTS, sorted_rows
-
-        def row(name, fits, memory, size, likes, downloads):
-            repo = SimpleNamespace(likes=likes, downloads=downloads, best_mmproj=lambda: None)
-            entry = SimpleNamespace(repo=repo, file=SimpleNamespace(size=size))
-            estimate = SimpleNamespace(total=memory)
-            return SimpleNamespace(
-                name=name, fits=fits, estimate=estimate, entry=entry, vision=False
-            )
-
-        rows = [
-            row("best", True, 40, 30, 10, 100),
-            row("small", True, 10, 5, 500, 9),
-            row("huge", False, 300, 250, 900, 10**6),
-            row("popular", True, 20, 15, 50, 10**5),
-        ]
-        order = {label: i for i, (label, _, _) in enumerate(SORTS)}
-
-        def names(label):
-            return [r.name for r in sorted_rows(rows, order[label])]
-
-        self.assertEqual(names("best first"), ["best", "small", "huge", "popular"])
-        self.assertEqual(names("memory, smallest first"), ["small", "popular", "best", "huge"])
-        self.assertEqual(names("memory, largest first"), ["best", "popular", "small", "huge"])
-        self.assertEqual(names("download size, smallest first")[0], "small")
-        self.assertEqual(names("download size, largest first")[:3], ["best", "popular", "small"])
-        self.assertEqual(names("likes, most first"), ["small", "popular", "best", "huge"])
-        self.assertEqual(names("downloads, most first"), ["popular", "best", "small", "huge"])
-
     def test_escape_goes_back_where_back_is_offered(self):
         from contextlib import nullcontext
 
@@ -930,14 +1510,13 @@ class PieceTest(unittest.TestCase):
             [Choice(("x",))],
             0,
             0,
-            {"b": "back"},
+            {"esc": "back"},
             60,
             24,
-            pages=tui.alternates(False, False, back=True),
         )
-        self.assertIn("  Back    b or Esc", [re.sub(r"\x1b\[[0-9]*m", "", x) for x in lines])
-        for back, expected in ((True, "b"), (False, Cancelled)):
-            with mock.patch.object(tui, "read_key", lambda: "esc"):
+        self.assertIn("  Back    Esc", [re.sub(r"\x1b\[[0-9]*m", "", x) for x in lines])
+        for back, expected in ((True, "esc"), (False, Cancelled)):
+            with mock.patch.object(tui, "read_key", lambda timeout=None: "esc"):
                 with mock.patch.object(tui, "raw_keys", nullcontext):
                     prompter = tui.TuiPrompter(out=io.StringIO())
                     if expected is Cancelled:

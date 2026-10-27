@@ -16,14 +16,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ornith_launcher.ui.keys import raw_keys, read_key
+from ornith_launcher.ui.plain import clean_cell, clip, pad, table_line, text_width
 from ornith_launcher.ui.prompts import (
-    BACK,
     NEXT_PAGE,
     PREVIOUS_PAGE,
     Cancelled,
     Choice,
     PlainPrompter,
+    detail_lines,
     key_help,
+    list_widths,
+    shown_key,
     with_nav_keys,
 )
 
@@ -74,12 +77,10 @@ def _shown_hint(choices: Sequence[Choice], click: str) -> str:
 
 
 # Keys that also work as a navigation key in full-screen lists.
-_ALTERNATE_KEYS = {"right": NEXT_PAGE, "left": PREVIOUS_PAGE, "esc": BACK}
+_ALTERNATE_KEYS = {"right": NEXT_PAGE, "left": PREVIOUS_PAGE}
 
 
-def alternates(
-    previous_page: bool, next_page: bool, back: bool = False, arrows: str = ARROWS
-) -> dict[str, str]:
+def alternates(previous_page: bool, next_page: bool, arrows: str = ARROWS) -> dict[str, str]:
     """Navigation key -> the other key that does the same, as shown in the actions."""
     left, right = ("←", "→") if arrows == ARROWS else ("Left", "Right")
     shown = {}
@@ -87,8 +88,6 @@ def alternates(
         shown[NEXT_PAGE] = right
     if previous_page:
         shown[PREVIOUS_PAGE] = left
-    if back:
-        shown[BACK] = "Esc"
     return shown
 
 
@@ -103,12 +102,22 @@ def footer(
     if click:
         entries.append(("open model card", click))
     for key, label in keys.items():
-        entries.append((label, f"{key} or {pages[key]}" if key in pages else key))
+        name = shown_key(key)
+        entries.append((label, f"{name} or {pages[key]}" if key in pages else name))
     return key_help([*entries, ("quit", "q")])
 
 
 def notice_lines(notice: str, width: int) -> list[str]:
-    return textwrap.wrap(notice, max(20, width - 2)) if notice else []
+    """The notice wrapped to ``width``, keeping its own line breaks."""
+    if not notice:
+        return []
+    rows = [row for line in notice.split("\n") for row in textwrap.wrap(line, max(20, width - 2))]
+    return [clip(row, width - 2) for row in rows]  # a long word is cut, never wrapped
+
+
+def detail_height(choices: Sequence[Choice], width: int) -> int:
+    """Lines the detail area takes: the tallest of the choices, so the list never jumps."""
+    return max((len(detail_lines(c, width - 2, str)) for c in choices), default=0) or 1
 
 
 def body_height(
@@ -117,11 +126,17 @@ def body_height(
     click: str = "",
     pages: Mapping[str, str] | None = None,
     notice: int = 0,
+    detail: int = 1,
+    gaps: int = 0,
 ) -> int:
-    """List rows that fit between the title and the actions; ``notice`` is its line count."""
-    # Title, notice, blank, header, blank, then after the rows: blank, detail, the URL
-    # when rows link, blank, "Actions", blank and one line per action.
-    fixed = 9 + notice + (1 if click else 0) + len(footer(keys, click=click, pages=pages))
+    """List rows that fit between the title and the actions.
+
+    ``notice`` and ``detail`` are the line counts of the notice and the detail area, and
+    ``gaps`` the blank lines before action rows.
+    """
+    # Title, notice, blank, header, blank, then after the rows: blank, the detail area
+    # (notes and the URL), blank, "Actions", blank and one line per action.
+    fixed = 8 + notice + detail + gaps + len(footer(keys, click=click, pages=pages))
     return max(3, height - fixed)
 
 
@@ -132,6 +147,26 @@ def arrows_for(out: object) -> str:
     except (UnicodeEncodeError, LookupError):
         return "Up/Down"
     return ARROWS
+
+
+def _tail(text: str, room: int) -> str:
+    """The end of ``text`` that fits in ``room`` columns, after "…" when the start is cut."""
+    if text_width(text) <= room:
+        return text
+    kept = ""
+    for ch in reversed(text):
+        if text_width(ch + kept) > max(1, room - 1):
+            break
+        kept = ch + kept
+    return "…" + kept
+
+
+def _gaps(choices: Sequence[Choice]) -> int:
+    return sum(1 for c in choices if c.action)
+
+
+def _bold(text: str) -> str:
+    return f"{BOLD}{text}{RESET}"
 
 
 def render_list(
@@ -155,48 +190,75 @@ def render_list(
     links on the main screen, not on the alternate screen used here, but it
     finds plain URLs anywhere.
     """
-    widths = [len(h) for h in headers]
-    for choice in choices:
-        for index, cell in enumerate(choice.cells):
-            widths[index] = max(widths[index], len(cell))
+    # Header and rows share one set of widths, counted in terminal columns, and every line
+    # is cut (never wrapped) at the edge, so a long or wide cell cannot shift a column.
+    headers = [clean_cell(h) for h in headers]
+    cells_of = [[clean_cell(cell) for cell in choice.cells] for choice in choices]
+    widths = list_widths(headers, choices)
     click = _shown_hint(choices, click)
     notes = notice_lines(notice, width)
 
     def line(cells: Sequence[str]) -> str:
-        text = "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(cells)).rstrip()
-        return text[: width - 3] if len(text) > width - 3 else text
+        return clip(table_line(cells, widths), width - 3)
 
-    def linked(text: str, choice: Choice) -> str:
+    def linked(text: str, index: int) -> str:
         # Added after the text is cut to width, so the escape codes take no columns.
+        choice = choices[index]
         if not (click and choice.link):
             return text
-        end = min(len(choice.cells[0]), len(text))
+        first = cells_of[index][0]
+        end = len(first) if text.startswith(first) else len(text)
         return hyperlink(text[:end], choice.link) + text[end:]
 
     # The header gets the same two-character indent as the "> " marker on the rows.
-    lines = [f"{BOLD}{title[:width]}{RESET}", *(f"  {n}" for n in notes)]
+    lines = [f"{BOLD}{clip(clean_cell(title), width)}{RESET}", *(f"  {n}" for n in notes)]
     lines += ["", f"  {BOLD}{line(headers)}{RESET}", ""]
-    rows = body_height(height, keys, click, pages, len(notes))
+    tallest = detail_height(choices, width)
+    rows = body_height(height, keys, click, pages, len(notes), tallest, _gaps(choices))
     for index in range(top, min(len(choices), top + rows)):
         choice = choices[index]
-        text = line(choice.cells)
-        if index == selected:
-            lines.append(f"{REVERSE}> {linked(text.ljust(width - 3), choice)}{RESET}")
+        text = line(cells_of[index])
+        if choice.action:
+            lines.append("")  # an action stands apart from the rows of data
+            text = clip(cells_of[index][0], width - 3)
+            marker = f"{REVERSE}> " if index == selected else "  "
+            lines.append(
+                f"{marker}{BOLD}{pad(text, width - 3) if index == selected else text}{RESET}"
+            )
+        elif index == selected:
+            lines.append(f"{REVERSE}> {linked(pad(text, width - 3), index)}{RESET}")
         elif not choice.enabled:
-            lines.append(f"{DIM}  {linked(text, choice)}{RESET}")
+            lines.append(f"{DIM}  {linked(text, index)}{RESET}")
         else:
-            lines.append(f"  {linked(text, choice)}")
+            lines.append(f"  {linked(text, index)}")
     current = choices[selected] if choices else None
     lines.append("")
-    lines.append(current.detail[:width] if current else "")
-    if click:
-        lines.append(current.link if current else "")
+    details = detail_lines(current, width - 2, _bold) if current else []
+    url = details.pop() if current and current.link else None
+    # Indented like the rows. The notes are wrapped to fit already (clip() would count the
+    # bold codes as columns), and the URL line is never cut, so the terminal can find it.
+    lines.extend(f"  {d}" if d else "" for d in details)
+    if url is not None:
+        lines.append(f"  {url}")
+    lines.extend([""] * (tallest - len(details) - (url is not None)))
     lines.append("")
     lines.append(f"  {BOLD}Actions{RESET}")
     lines.append("")
     actions = footer(keys, arrows, click, pages)
-    lines.extend(f"{DIM}  {text[: width - 2]}{RESET}" for text in actions)
+    lines.extend(f"{DIM}  {clip(text, width - 2)}{RESET}" for text in actions)
     return lines
+
+
+# How often a waiting list checks for a resized window, in seconds.
+RESIZE_POLL = 0.25
+
+
+def _next_key(size: os.terminal_size) -> str:
+    """The next key press, or "" once the window no longer has ``size``."""
+    while True:
+        key = read_key(timeout=RESIZE_POLL)
+        if key or shutil.get_terminal_size((100, 30)) != size:
+            return key
 
 
 @dataclass
@@ -209,6 +271,54 @@ class TuiPrompter(PlainPrompter):
 
     def bold(self, text: str) -> str:
         return f"{BOLD}{text}{RESET}"
+
+    def _menu_key(self, keys: Mapping[str, str]) -> str:
+        """One of ``keys``, pressed without Enter; q, Ctrl+D or an unused Esc quits."""
+        self.out.write("\nPress a key: ")
+        self.out.flush()
+        with raw_keys():
+            while True:
+                key = read_key()
+                key = key.lower() if len(key) == 1 else key
+                if key in keys:
+                    self.out.write(f"{shown_key(key)}\n")
+                    return key
+                if key in ("q", "esc", "eof"):
+                    self.out.write("\n")
+                    raise Cancelled()
+
+    def _line(self, prompt: str) -> str | None:
+        """A typed answer read key by key, so Esc goes back at once (None) without Enter.
+
+        Backspace deletes, Ctrl+U clears the line, Ctrl+D quits. A long answer scrolls
+        within the line instead of wrapping.
+        """
+        width = shutil.get_terminal_size((100, 30)).columns
+        if text_width(prompt) > width - 20:
+            self.say(prompt.rstrip())  # the question on its own line, the answer below it
+            prompt = "> "
+        text = ""
+        with raw_keys():
+            while True:
+                self.out.write("\r\x1b[K" + prompt + _tail(text, width - 1 - text_width(prompt)))
+                self.out.flush()
+                key = read_key()
+                if key in ("enter", "esc", "eof"):
+                    self.out.write("\n")
+                    if key == "eof":
+                        raise Cancelled()
+                    return text.strip() if key == "enter" else None
+                if key == "backspace":
+                    text = text[:-1]
+                elif key == "\x15":
+                    text = ""
+                elif len(key) == 1 and key.isprintable():
+                    text += key
+
+    def _clear_for_quit(self) -> None:
+        # The visible screen only; the scrollback keeps what setup printed.
+        self.out.write(CLEAR)
+        self.out.flush()
 
     def choose(
         self,
@@ -230,23 +340,31 @@ class TuiPrompter(PlainPrompter):
             "back": back,
             "main_menu": main_menu,
         }
-        if self.assume_yes or not choices:
+        if self.assume_yes:
             return super().choose(
                 title, headers, choices, default=default, keys=keys, notice=notice, **nav
             )
         keys = with_nav_keys(keys or {}, **nav)
+        if not choices:
+            # Only actions: printed where the screen is, so what came before stays in view,
+            # and each takes one key press.
+            self._print_menu(title, headers, choices, keys, notice)
+            return self._menu_key(keys)
         selected = default
         top = 0
         arrows = arrows_for(self.out)
         click = _shown_hint(choices, click_hint())
-        pages = alternates(previous_page, next_page, back, arrows)
+        pages = alternates(previous_page, next_page, arrows)
         self.out.write(ALT_SCREEN_ON)
         try:
             with raw_keys():
                 while True:
                     size = shutil.get_terminal_size((100, 30))
                     notes = len(notice_lines(notice, size.columns))
-                    body = body_height(size.lines, keys, click, pages, notes)
+                    tallest = detail_height(choices, size.columns)
+                    body = body_height(
+                        size.lines, keys, click, pages, notes, tallest, _gaps(choices)
+                    )
                     top = min(max(top, selected - body + 1), selected)
                     lines = render_list(
                         title,
@@ -264,7 +382,9 @@ class TuiPrompter(PlainPrompter):
                     )
                     self.out.write(CLEAR + "\r\n".join(lines))
                     self.out.flush()
-                    key = read_key()
+                    key = _next_key(size)
+                    if not key:
+                        continue  # the window was resized: draw it again at the new size
                     if key in ("up", "k"):
                         selected = max(0, selected - 1)
                     elif key in ("down", "j"):
@@ -277,10 +397,10 @@ class TuiPrompter(PlainPrompter):
                         return selected
                     elif key in _ALTERNATE_KEYS and _ALTERNATE_KEYS[key] in pages:
                         return _ALTERNATE_KEYS[key]
+                    elif key in keys:  # Esc is Back wherever a menu offers it
+                        return key
                     elif key in ("q", "esc", "eof"):
                         raise Cancelled()
-                    elif key in keys:
-                        return key
         finally:
             self.out.write(ALT_SCREEN_OFF)
             self.out.flush()

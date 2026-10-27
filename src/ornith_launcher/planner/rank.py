@@ -2,9 +2,11 @@
 
 A candidate is one model file with a context size, KV cache type and placement.
 It fits when every memory pool it uses keeps at least 15% headroom after the
-OS baseline. The ordering and the suggested list follow the policy the owner
-chose (design 8.5): fit first, then how well tested, source, version, quality
-(quant and size), context and KV type.
+OS baseline. One that fits only by eating into that headroom, or only once other
+apps close, is a stretch; one that needs more than the pool has at all is too big.
+The ordering and the suggested list follow the policy the owner chose (design
+8.5): fit first, then how well tested, source, version, quality (quant and size),
+context and KV type.
 """
 
 from __future__ import annotations
@@ -31,7 +33,8 @@ from ornith_launcher.ui.plain import context_label
 
 TESTED_FILE = "tested.json"
 
-CONTEXTS = (65536, 131072, 262144, 524288, 1048576)
+CONTEXTS = (32768, 65536, 131072, 262144, 524288, 1048576)  # 32k for low-memory machines
+SHORT_CONTEXT = 65536  # below this, a context is a fallback: ranked after every longer one
 KV_TYPES = ("f16", "q8_0")
 DEFAULT_SLOTS = 4
 HEADROOM = 0.85  # keep at least 15% of each pool free
@@ -62,6 +65,18 @@ class Placement(str, enum.Enum):
     FULL_GPU = "full-gpu"  # everything in one GPU's VRAM
     MOE_OFFLOAD = "moe-offload"  # experts in RAM (--cpu-moe), the rest in VRAM
     MULTI_GPU = "multi-gpu"  # layers split across several GPUs
+
+
+class Fit(str, enum.Enum):
+    """How a candidate sits in this machine's memory, for the context screen."""
+
+    FITS = "fits"  # within the 15% headroom, and free right now
+    STRETCH = "stretch"  # into the headroom, or more than is free right now
+    TOO_BIG = "too big"  # more than the pool has after the OS baseline
+
+
+# The Fits column wording, shared by the setup lists and ``scan --full``.
+FIT_LABELS = {Fit.FITS: "yes", Fit.STRETCH: "stretch", Fit.TOO_BIG: "too big"}
 
 
 THIRD_PARTY_NOTE = "third-party build, not from Ornith AI"
@@ -142,6 +157,38 @@ class Candidate:
     @property
     def spare(self) -> int:
         return min(n.spare for n in self.needs)
+
+    @property
+    def fit(self) -> Fit:
+        if any(n.need > n.pool.usable for n in self.needs):
+            return Fit.TOO_BIG
+        if not self.fits or not self.fits_now:
+            return Fit.STRETCH
+        return Fit.FITS
+
+    @property
+    def fit_reason(self) -> str:
+        """Why a candidate is a stretch or too big; "" when it fits."""
+        for n in self.needs:
+            if n.need > n.pool.usable:
+                return (
+                    f"needs {_gib(n.need)} GiB; {n.pool.name} has {_gib(n.pool.usable)} GiB "
+                    "at most after the system's own use"
+                )
+        for n in self.needs:
+            if n.need > n.budget:
+                return (
+                    f"needs {_gib(n.need)} GiB, {_gib(n.need - n.budget)} GiB into the 15% of "
+                    f"{n.pool.name} kept free: it may slow down or fail under load"
+                )
+        for n in self.needs:
+            free = n.pool.available_now
+            if free is not None and n.need > free:
+                return (
+                    f"needs {_gib(n.need)} GiB but {_gib(free)} GiB of {n.pool.name} is free "
+                    "right now: close other apps before launching"
+                )
+        return ""
 
     @property
     def shortfall(self) -> str | None:
@@ -340,6 +387,9 @@ def ranking_key(families: Families) -> Callable[[Candidate], tuple[Any, ...]]:
             context = (2, -c.context)
         return (
             not c.fits,
+            # 32k is a fallback for small machines: any longer context that fits comes first,
+            # since coding agents' own instructions fill much of a short one.
+            c.context < SHORT_CONTEXT,
             _LEVEL_ORDER[c.file_level],
             source,
             cls.version is None,

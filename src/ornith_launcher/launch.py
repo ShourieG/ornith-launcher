@@ -317,8 +317,11 @@ def make_runtime(app: App) -> DockerRuntime:
     return DockerRuntime(app.host)
 
 
-def prompter_for(app: App) -> PlainPrompter:
-    return PlainPrompter(read_line=app.read_line, out=app.out)
+def prompter_for(app: App, assume_yes: bool = False) -> PlainPrompter:
+    """The same prompter setup uses: full screen in a terminal, so Esc and keys act at once."""
+    from ornith_launcher.wizard import make_prompter
+
+    return make_prompter(app, assume_yes=assume_yes)
 
 
 # Commands -------------------------------------------------------------------------------
@@ -536,7 +539,7 @@ def run_chat_proxy(app: App, args: argparse.Namespace) -> int:
 def run_remove(app: App, args: argparse.Namespace) -> int:
     from ornith_launcher.uninstall import remove_profile
 
-    prompter = PlainPrompter(read_line=app.read_line, out=app.out, assume_yes=args.yes)
+    prompter = prompter_for(app, assume_yes=args.yes)
     profile = load_profile(app.paths, args.name)
     remove_profile(app, profile, make_runtime(app), prompter)
     settings = load_settings(app.paths)

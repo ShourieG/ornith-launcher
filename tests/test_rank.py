@@ -8,6 +8,7 @@ from ornith_launcher.catalog.families import load_families
 from ornith_launcher.planner.memory_model import load_calibration
 from ornith_launcher.planner.rank import (
     Filters,
+    Fit,
     Level,
     Placement,
     build_candidates,
@@ -102,6 +103,16 @@ class SuggestionTest(unittest.TestCase):
         self.assertIn("vision off", suggestions[0].reason)
         for s in suggestions:
             self.assertEqual(s.candidate.entry.classification.shape.label, "9B")
+        # 32k never displaces a longer context that fits, but it is the lowest-memory row.
+        lowest = next(s for s in suggestions if s.reason.startswith("Lowest memory"))
+        self.assertEqual(lowest.candidate.context, 32768)
+        self.assertIn("32k context", lowest.reason)
+
+    def test_32k_comes_after_every_longer_context_that_fits(self):
+        ranked = ranked_for("spark")
+        fitting = [c for c in ranked if c.fits]
+        first_short = next(i for i, c in enumerate(fitting) if c.context == 32768)
+        self.assertTrue(all(c.context == 32768 for c in fitting[first_short:]))
 
     def test_discrete_gpu_offloads_the_35b_experts(self):
         top = suggest(ranked_for("gpu24_ram64"), FAMILIES)[0].candidate
@@ -189,7 +200,7 @@ class OrderingTest(unittest.TestCase):
             for c in ranked_for("spark")
             if c.entry.file.name == "Ornith-1.5-9B-Q8_0.gguf" and c.vision and c.kv_type == "f16"
         ]
-        self.assertEqual(rows, [262144, 524288, 1048576, 131072, 65536])
+        self.assertEqual(rows, [262144, 524288, 1048576, 131072, 65536, 32768])
 
     def test_quant_rank(self):
         order = ["Q8_0", "Q6_K", "Q5_K_M", "Q4_K_M", "IQ4_XS"]
@@ -204,7 +215,7 @@ class CandidateTest(unittest.TestCase):
     def test_contexts_and_yarn(self):
         rows = [c for c in ranked_for("spark") if c.entry.file.name == "Ornith-1.0-9B-Q8_0.gguf"]
         contexts = {c.context: c for c in rows}
-        self.assertEqual(sorted(contexts), [65536, 131072, 262144, 524288, 1048576])
+        self.assertEqual(sorted(contexts), [32768, 65536, 131072, 262144, 524288, 1048576])
         self.assertIsNone(contexts[262144].yarn_factor)
         self.assertEqual(contexts[1048576].yarn_factor, 4)
         self.assertIn("YaRN is not documented for Ornith 1.0", contexts[524288].notes)
@@ -232,6 +243,33 @@ class CandidateTest(unittest.TestCase):
         self.assertIn("VERSION UNKNOWN", mystery.badges)
         q8_kv = next(c for c in rows if c.kv_type == "q8_0")
         self.assertIn("UNTESTED KV", q8_kv.badges)
+
+    def test_fit_verdict_for_the_context_screen(self):
+        def q4_122b(pools):
+            candidates = build_candidates(
+                [e for e in ENTRIES if e.repo.id == "ornith-ai/Ornith-1.5-122B-GGUF"],
+                pools,
+                load_calibration(),
+                load_tested(),
+                kv_types=["f16"],
+            )
+            q4 = [c for c in candidates if c.entry.classification.quant == "Q4_K_M" and c.vision]
+            return {c.context: c for c in q4}
+
+        spark = q4_122b(MACHINES["spark"])
+        self.assertIs(spark[262144].fit, Fit.FITS)
+        self.assertEqual(spark[262144].fit_reason, "")
+        # 1M needs more than the plan's 85% but less than the whole pool: a stretch.
+        self.assertIs(spark[1048576].fit, Fit.STRETCH)
+        self.assertIn("into the 15% of Unified kept free", spark[1048576].fit_reason)
+        # Fits the plan, but other apps hold the memory now: a stretch until they close.
+        busy = [Pool(PoolKind.UNIFIED, "Unified", int(121.7 * GIB), int(5.3 * GIB), 50 * GIB)]
+        self.assertIs(q4_122b(busy)[65536].fit, Fit.STRETCH)
+        self.assertIn("close other apps", q4_122b(busy)[65536].fit_reason)
+        # More than the machine has at all: too big.
+        small = q4_122b(MACHINES["laptop"])
+        self.assertIs(small[65536].fit, Fit.TOO_BIG)
+        self.assertIn("has 12.0 GiB at most", small[65536].fit_reason)
 
     def test_gated_repos_get_no_candidates(self):
         self.assertFalse([c for c in ranked_for("spark") if c.entry.repo.id.startswith("gated/")])

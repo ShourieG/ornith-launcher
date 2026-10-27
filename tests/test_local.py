@@ -179,6 +179,17 @@ class IdentifyTest(unittest.TestCase):
         model = identify(self.found(path), FAMILIES, RULES, self.catalog)
         self.assertEqual(model.mmproj.name, "mmproj-Ornith-1.5-9B-BF16.gguf")
 
+    def test_a_projector_named_after_the_model_is_not_listed_as_one(self):
+        path = fake_model(self.root / "Ornith-1.5-9B-Q8_0.gguf", "9B")
+        projector = self.root / "Ornith-1.5-9B.mmproj-Q8_0.gguf"
+        with open(projector, "wb") as handle:  # as big as a model, so size alone would not tell
+            handle.write(gguf_bytes([("general.architecture", ValueType.STRING, "clip")]))
+            handle.truncate(GIB + 1)
+        found = search_entered_path(self.root).files
+        self.assertEqual([f.path.name for f in found], ["Ornith-1.5-9B-Q8_0.gguf"])
+        model = identify(self.found(path), FAMILIES, RULES, self.catalog)
+        self.assertEqual(model.mmproj.name, "Ornith-1.5-9B.mmproj-Q8_0.gguf")
+
     def test_checksum_confirmation_is_cached(self):
         path = fake_model(self.root / "Ornith-1.5-9B-Q4_K_M.gguf", "9B", length=4096)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()

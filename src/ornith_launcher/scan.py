@@ -27,9 +27,11 @@ from ornith_launcher.catalog.hfapi import HubClient
 from ornith_launcher.pins import load_pins
 from ornith_launcher.planner.memory_model import load_calibration
 from ornith_launcher.planner.rank import (
+    FIT_LABELS,
     HEADROOM,
     Candidate,
     Filters,
+    Fit,
     Suggestion,
     build_candidates,
     load_tested,
@@ -63,7 +65,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--source", dest="sources", action="append", choices=("official", "community")
     )
     parser.add_argument("--quant", dest="quants", action="append", help="e.g. Q8_0")
-    parser.add_argument("--fits", action="store_true", help="only combinations that fit")
+    parser.add_argument(
+        "--fits", action="store_true", help="hide what is too big or eats into the 15%% kept free"
+    )
     parser.add_argument("--search", default="", help="words that must appear in the repo or file")
     parser.add_argument(
         "--uncensored", action="store_true", help="also list uncensored (abliterated) models"
@@ -204,7 +208,9 @@ def print_suggestions(app: App, suggestions: list[Suggestion]) -> None:
         )
     app.say(table(["#", "Model", "Quant", "Context", "KV", "Memory", "Repo"], rows))
     for index, s in enumerate(suggestions, 1):
-        app.say(f"  {index}. {s.reason}")
+        c = s.candidate
+        warning = "" if c.fit is Fit.FITS else f" Warning: {c.fit.value}: {c.fit_reason}."
+        app.say(f"  {index}. {s.reason}{warning}")
 
 
 def print_full(app: App, candidates: list[Candidate], limit: int) -> None:
@@ -221,7 +227,7 @@ def print_full(app: App, candidates: list[Candidate], limit: int) -> None:
                 "on" if c.vision else ("off" if c.entry.repo.best_mmproj() else "-"),
                 c.placement.value,
                 gib(c.estimate.total),
-                "yes" if c.fits else "no",
+                FIT_LABELS[c.fit],
                 c.entry.repo.licence or "none",
                 " ".join(c.badges),
                 c.entry.repo.id + "/" + c.entry.file.name,
@@ -231,6 +237,10 @@ def print_full(app: App, candidates: list[Candidate], limit: int) -> None:
     app.say(table(headers + ["Licence", "Badges", "File"], rows))
     if len(candidates) > limit > 0:
         app.say(f"  ... {len(candidates) - limit} more. Show more with --limit, or filter.")
+    app.say("  Fits: yes = fits with 15% of memory kept free; stretch = uses some of that 15%, or")
+    app.say(
+        "  needs other apps closed first; too big = more than this machine has, at your own risk."
+    )
 
 
 def _model(c: Candidate) -> str:
