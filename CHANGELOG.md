@@ -32,6 +32,8 @@ All notable changes to this project are recorded here. The format follows
   `ornith-launcher` alone opens setup and never starts a server by itself; setup's first menu has "Launch a model"
   once a setup exists. The server listens on 127.0.0.1 only, and Ctrl+C stops it (default yes).
 - `setup --repair NAME` puts back a missing image or download.
+- `setup --shortcuts NAME` adds a desktop icon or applications menu entry to a profile set up earlier. It asks
+  the same two questions as setup and skips any the profile already has.
 - `doctor` command: a read-only check of Docker, GPU access, disk space, the llama.cpp image, the catalog, every
   profile's files and the optional tools, each problem with its fix.
 - Claude Code and OpenCode: setup can connect a profile to either or both, installing them with their official

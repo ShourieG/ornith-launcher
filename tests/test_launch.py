@@ -543,6 +543,66 @@ class LaunchCommandTest(unittest.TestCase):
         self.assertFalse(model.exists())
         self.assertFalse(shortcut.exists())
 
+    # setup --shortcuts -----------------------------------------------------------------
+
+    def shortcuts(self, *answers):
+        """Run ``setup --shortcuts`` on a desktop; returns the questions asked and the profile."""
+        self.host._env.update(DISPLAY=":0", XDG_CURRENT_DESKTOP="GNOME")
+        replies = iter(answers)
+        asked = []
+
+        def read_line(prompt):
+            asked.append(prompt)
+            return next(replies)
+
+        self.app.read_line = read_line
+        code = self.run_cli("setup", "--plain", "--shortcuts", self.profile.name)
+        return code, asked, load_profile(self.app.paths, self.profile.name)
+
+    def test_setup_shortcuts_adds_an_icon_to_a_saved_profile(self):
+        from ornith_launcher.installed import load_installed
+
+        (self.root / "Desktop").mkdir()
+        code, asked, saved = self.shortcuts("", "")  # desktop icon (default yes), menu (default no)
+        self.assertEqual(code, 0)
+        icon = Path(saved.integrations["desktop_copy"])
+        self.assertTrue(icon.is_file())
+        self.assertIn(f"launch {self.profile.name}", icon.read_text())
+        self.assertNotIn("shortcut", saved.integrations)
+        self.assertEqual(load_installed(self.app.paths).shortcuts, [str(icon)])
+
+    def test_setup_shortcuts_asks_only_about_what_is_missing(self):
+        icon = self.root / "Desktop" / "icon.desktop"
+        icon.parent.mkdir()
+        icon.write_text("x")
+        self.profile.integrations["desktop_copy"] = str(icon)
+        save_profile(self.app.paths, self.profile)
+        code, asked, saved = self.shortcuts("y")
+        self.assertEqual(code, 0)
+        text = self.out.getvalue() + "".join(asked)
+        self.assertNotIn("on your desktop?", text)
+        self.assertIn("Also add it to your applications menu?", text)
+        self.assertTrue(Path(saved.integrations["shortcut"]).is_file())
+        self.assertEqual(icon.read_text(), "x")  # the icon already there is left alone
+
+    def test_setup_shortcuts_says_so_when_both_exist(self):
+        for key in ("desktop_copy", "shortcut"):
+            path = self.root / f"{key}.desktop"
+            path.write_text("x")
+            self.profile.integrations[key] = str(path)
+        save_profile(self.app.paths, self.profile)
+        code, asked, saved = self.shortcuts()
+        self.assertEqual(code, 0)
+        self.assertEqual(asked, [])
+        self.assertIn("already has a desktop icon", self.out.getvalue())
+
+    def test_setup_shortcuts_without_a_desktop_names_the_launch_command(self):
+        self.app.read_line = lambda prompt: self.fail("nothing should be asked")
+        self.assertEqual(self.run_cli("setup", "--plain", "--shortcuts", self.profile.name), 1)
+        error = self.app.err.getvalue()
+        self.assertIn("no desktop session", error)
+        self.assertIn(f"ornith-launcher launch {self.profile.name}", error)
+
     def test_no_command_opens_setup_and_never_starts_a_server(self):
         from ornith_launcher import wizard
 

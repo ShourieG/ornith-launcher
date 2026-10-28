@@ -118,6 +118,48 @@ class ReportTest(unittest.TestCase):
             "regenerate: python3 -m ornith_launcher.bench.report docs/BENCHMARKS.md",
         )
 
+    def test_readme_context_table_matches_the_data(self):
+        bench_data = load_json(TESTED_FILE)["benchmarks"]
+
+        def cell(key, model, column):
+            section = bench_data[key]
+            row = next(r for r in section["rows"] if r["model"] == model)
+            index = section["columns"].index(column)
+            self.assertEqual(row["levels"][index], "TESTED", (key, model, column))
+            return row["values"][index]
+
+        memory = [
+            cell("memory", f"35B Q8_0, {c}", "Peak memory in use").replace("-", " to ")
+            for c in ("native 262k", "524k", "1M")
+        ]
+        needles = [
+            cell("needle", model, column).replace("/", " of ") + f" at {column} tokens"
+            for model, column in (
+                ("Uncensored, native 262k", "240k"),
+                ("Uncensored, 524k (YaRN x2)", "456k"),
+                ("Uncensored, 1M (YaRN x4)", "917k"),
+            )
+        ]
+        prefill = [
+            cell("prefill", f"Uncensored, {c}", "Cold total") + " tokens"
+            for c in ("native", "524k", "1M")
+        ]
+        expected = [
+            "| Peak memory in use | " + " | ".join(memory) + " |",
+            "| Retrieval test, codes found | " + " | ".join(needles) + " |",
+            "| Cold prefill | " + " | ".join(prefill) + " |",
+        ]
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        lines = readme.splitlines()
+        for line in expected:
+            self.assertIn(line, lines, "update the README's extended-context table")
+        prose = " ".join(readme.split())  # the prose is wrapped at any word
+        standard = cell("prefill", "Standard, 1M", "Cold total")
+        self.assertIn(f"took {standard} tokens", prose)
+        rows = {r["model"]: r["values"] for r in bench_data["perplexity"]["rows"]}
+        x4 = max(float(v[2]) / float(v[0]) - 1 for v in rows.values())
+        self.assertIn(f"x4 cost at most {x4:.1%}", prose)
+
     def test_every_number_is_labelled(self):
         data = load_json(TESTED_FILE)["benchmarks"]
         for key in ("perplexity", "needle", "prefill", "memory"):

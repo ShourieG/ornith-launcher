@@ -196,16 +196,21 @@ def offer_chat_log(app: App, prompter: PlainPrompter, plan: Plan, profile: Profi
 
 def offer_shortcut(app: App, prompter: PlainPrompter, plan: Plan, profile: Profile) -> None:
     """A launch icon on the desktop (default yes), then the applications menu (default no)."""
-    if plan.report.platform.headless:
-        return
+    if not plan.report.platform.headless:
+        ask_shortcuts(app, prompter, profile)
+
+
+def ask_shortcuts(app: App, prompter: PlainPrompter, profile: Profile) -> None:
+    """The two questions, skipping whatever the profile already has."""
     comment = f"Start Ornith ({profile.name}) with ornith-launcher (unofficial)"
     in_terminal = profile.terminal.get("id") == THIS_TERMINAL
     entry = desktop_entry(
         profile.name, self_command(), comment, in_terminal, chat_action=chat_log.enabled(profile)
     )
     desktop = desktop_dir(app.host.read_text(str(user_dirs_file(app.env, app.home))), app.home)
-    on_desktop = False
-    if desktop is not None and desktop.is_dir():
+    # A profile set up earlier may have one already; only the missing one is asked about.
+    on_desktop = _has_file(profile, "desktop_copy")
+    if not on_desktop and desktop is not None and desktop.is_dir():
         if prompter.confirm("Put a launch icon for this model on your desktop?", default=True):
             path = desktop / shortcut_name(profile.name)
             write_shortcut(path, entry)
@@ -217,6 +222,8 @@ def offer_shortcut(app: App, prompter: PlainPrompter, plan: Plan, profile: Profi
                 app.say(
                     '  If the icon says "Allow Launching", right-click it and choose that once.'
                 )
+    if _has_file(profile, "shortcut"):
+        return
     question = (
         "Also add it to your applications menu?"
         if on_desktop
@@ -228,6 +235,11 @@ def offer_shortcut(app: App, prompter: PlainPrompter, plan: Plan, profile: Profi
         record(app.paths, "shortcuts", str(path))
         profile.integrations["shortcut"] = str(path)
         app.say(f"  Created {path}. It appears in your applications menu.")
+
+
+def _has_file(profile: Profile, key: str) -> bool:
+    path = profile.integrations.get(key)
+    return bool(path) and Path(path).is_file()
 
 
 def _trust_launcher(app: App, path: Path) -> bool:
@@ -362,4 +374,24 @@ def change_integrations(app: App, prompter: PlainPrompter, name: str) -> int:
     if profile.runtime.template.source != before and make_runtime(app).status(profile).alive:
         app.say("The chat template changed; restart the server for it to take effect:")
         app.say(f"  ornith-launcher stop {name} && ornith-launcher launch {name}")
+    return 0
+
+
+def add_shortcuts(app: App, prompter: PlainPrompter, name: str) -> int:
+    """``setup --shortcuts NAME``: the desktop icon and menu questions for a saved profile."""
+    from ornith_launcher.profiles import load_profile
+    from ornith_launcher.system.platform import detect_platform
+
+    profile = load_profile(app.paths, name)
+    if detect_platform(app.host).headless:
+        raise SetupError(
+            "there is no desktop session here, so there is nowhere to put a launch icon",
+            hint=f"Run this from a desktop terminal, or start the model with: "
+            f"ornith-launcher launch {name}",
+        )
+    if _has_file(profile, "desktop_copy") and _has_file(profile, "shortcut"):
+        app.say(f"{name} already has a desktop icon and an applications menu entry.")
+        return 0
+    ask_shortcuts(app, prompter, profile)
+    save_profile(app.paths, profile)
     return 0

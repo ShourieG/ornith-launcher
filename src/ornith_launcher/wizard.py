@@ -1930,6 +1930,9 @@ def add_arguments(parser) -> None:
         "--integrations", metavar="NAME", help="connect a profile to Claude Code or OpenCode"
     )
     parser.add_argument(
+        "--shortcuts", metavar="NAME", help="add a desktop icon or menu entry for a profile"
+    )
+    parser.add_argument(
         "--accept-uncensored",
         action="store_true",
         help="accept an uncensored model with --yes (it is never accepted otherwise)",
@@ -1956,6 +1959,7 @@ def default_args():
         name=None,
         repair=None,
         integrations=None,
+        shortcuts=None,
         accept_uncensored=False,
     )
 
@@ -1969,6 +1973,8 @@ def run_setup(app: App, args) -> int:
         return setup_profile.repair(app, prompter, args.repair)
     if getattr(args, "integrations", None):
         return setup_profile.change_integrations(app, prompter, args.integrations)
+    if getattr(args, "shortcuts", None):
+        return setup_profile.add_shortcuts(app, prompter, args.shortcuts)
     if args.models_dir is not None:
         settings.models_dir = str(args.models_dir.expanduser())
     wizard = Wizard(
