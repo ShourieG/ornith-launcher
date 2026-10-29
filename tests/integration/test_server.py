@@ -11,6 +11,7 @@ Each test starts its own server on a spare port and removes it afterwards.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import unittest
 from dataclasses import replace
@@ -37,8 +38,9 @@ LATE_SYSTEM = LEADING_ONLY + [
 
 
 @unittest.skipUnless(
-    os.environ.get("ORNITH_IT") == "1" and MODEL,
-    "set ORNITH_IT=1 and ORNITH_IT_MODEL=<path to an Ornith GGUF> to run",
+    os.environ.get("ORNITH_IT") == "1" and MODEL and sys.platform != "darwin",
+    "set ORNITH_IT=1 and ORNITH_IT_MODEL=<path to an Ornith GGUF> to run (on a Mac, see "
+    "test_native)",
 )
 class RealServerTest(unittest.TestCase):
     def setUp(self):

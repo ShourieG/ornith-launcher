@@ -1,4 +1,5 @@
-"""Short-context quality: ``llama perplexity`` on local prose, in the profile's image."""
+"""Short-context quality: ``llama perplexity`` on local prose, in the profile's image
+(or, on macOS, with the native ``llama-perplexity`` next to the server)."""
 
 from __future__ import annotations
 
@@ -27,6 +28,16 @@ def perplexity_args(profile: Profile, text: Path, yarn_factor: int | None = None
     args += ["-fa", "on"]
     if profile.runtime.direct_io:
         args += ["--load-mode", "dio"]
+    return args + yarn_args(yarn_factor, profile.runtime.native_context)
+
+
+def native_perplexity_args(
+    binary: Path, profile: Profile, text: Path, yarn_factor: int | None = None
+) -> list[str]:
+    """The same test with the native build: real file paths, no Docker."""
+    layers = "0" if profile.runtime.flavour == "cpu" else "999"
+    args = [str(binary), "-m", profile.model.parts[0], "-f", str(text)]
+    args += ["-c", str(CONTEXT), "-b", str(CONTEXT), "-ngl", layers, "-fa", "on"]
     return args + yarn_args(yarn_factor, profile.runtime.native_context)
 
 

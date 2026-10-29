@@ -15,6 +15,7 @@ from ornith_launcher import chat_log
 from ornith_launcher.app import App, self_command
 from ornith_launcher.errors import OrnithLauncherError
 from ornith_launcher.installed import record
+from ornith_launcher.integrations import tool_windows
 from ornith_launcher.integrations.terminals import (
     THIS_TERMINAL,
     by_id,
@@ -35,8 +36,9 @@ from ornith_launcher.runtime.monitor import (
     read_line_with_timeout,
     stop_banner,
 )
+from ornith_launcher.runtime.native import NativeRuntime, Runtime
 from ornith_launcher.settings import load_settings, save_settings
-from ornith_launcher.system.memory import parse_meminfo
+from ornith_launcher.system.memory import read_meminfo
 from ornith_launcher.system.platform import detect_platform
 from ornith_launcher.ui.plain import context_label, table
 from ornith_launcher.ui.prompts import Choice, PlainPrompter
@@ -56,9 +58,7 @@ def repair_hint(name: str) -> str:
 # Checks before starting -----------------------------------------------------------------
 
 
-def preflight(
-    app: App, profile: Profile, runtime: DockerRuntime, check_image: bool = True
-) -> list[str]:
+def preflight(app: App, profile: Profile, runtime: Runtime, check_image: bool = True) -> list[str]:
     """What stops this profile from starting, each with the fix (empty when all is well)."""
     problems = []
     for part in profile.model.parts:
@@ -90,7 +90,7 @@ def preflight(
         )
     if check_image and not runtime.image_present(profile.runtime.image):
         problems.append(
-            f"The llama.cpp image {profile.runtime.image.split('@')[0]} is not downloaded. "
+            f"The {runtime.describe(profile.runtime.image)} is not downloaded. "
             + repair_hint(profile.name)
         )
     return problems
@@ -125,17 +125,24 @@ def resolve_name(app: App, name: str | None, prompter: PlainPrompter | None = No
 @dataclass
 class Launcher:
     app: App
-    runtime: DockerRuntime
+    runtime: Runtime
     prompter: PlainPrompter
 
     def say(self, text: str = "") -> None:
         self.app.say(text)
 
-    def serve(self, profile: Profile, monitor: bool = True, chat: bool | None = None) -> int:
+    def serve(
+        self,
+        profile: Profile,
+        monitor: bool = True,
+        chat: bool | None = None,
+        tools: bool = True,
+    ) -> int:
         """Start (or reuse) the server, wait until it answers, then monitor it.
 
         ``chat`` (default: the profile's choice) puts the chat log proxy in front of the
-        server and opens the chat log window as soon as the server starts.
+        server and opens the chat log window as soon as the server starts. ``tools``
+        opens the coding tools the profile asked for, once the server answers.
         """
         chat = chat_log.enabled(profile) if chat is None else chat
         if monitor:  # the banner is the first thing in a new server window
@@ -186,6 +193,8 @@ class Launcher:
                 self.stop_server(profile)
             raise
         self.print_ready(profile)
+        if tools:
+            self.open_tools(profile)
         if monitor:
             Monitor(
                 self.app.host,
@@ -240,13 +249,37 @@ class Launcher:
             self.say(f"Warning: the chat log proxy stopped and could not start again: {problem}")
 
     def open_chat_window(self, profile: Profile) -> bool:
-        if detect_platform(self.app.host).headless:
+        if detect_platform(self.app.host, self.app.os_name).headless:
             self.say(
                 "There is no desktop here for a chat log window. See the chat log in another "
                 f"terminal with: ornith-launcher chat-log {profile.name}"
             )
             return False
         return chat_log.open_window(self.app, profile)
+
+    def open_tools(self, profile: Profile) -> None:
+        """A window per coding tool the profile asked for, connected to this model."""
+        wanted = tool_windows.chosen(profile)
+        if not wanted:
+            return
+        folder = tool_windows.folder(self.app, profile)
+        headless = detect_platform(self.app.host, self.app.os_name).headless
+        terminal = None if headless else chat_log.log_terminal(self.app, profile)
+        for tool in wanted:
+            name = tool_windows.NAMES[tool]
+            command = tool_windows.tool_command(self.app, profile, tool)
+            if command is None:
+                self.say(
+                    f"{name} was not found, so it was not opened. Install and connect it again "
+                    f"with: ornith-launcher setup --integrations {profile.name}"
+                )
+                continue
+            argv = tool_windows.in_folder(command, folder)
+            title = f"{name}: {profile.name}"
+            if terminal is not None and open_in_terminal(self.app.host, terminal, argv, title):
+                self.say(f"Opened {name} in a separate {terminal.name} window, in {folder}.")
+                continue
+            self.say(f"Start {name} in another terminal with: {argv[2]}")
 
     def print_ready(self, profile: Profile) -> None:
         self.say()
@@ -303,7 +336,7 @@ class Launcher:
         return True
 
     def _memory_warning(self, profile: Profile) -> None:
-        memory = parse_meminfo(self.app.host.read_text("/proc/meminfo") or "")
+        memory = read_meminfo(self.app.host)
         available = memory.get("MemAvailable")
         needed = profile.plan.estimate_gib * GIB
         if available is not None and profile.runtime.placement == "single" and available < needed:
@@ -313,7 +346,10 @@ class Launcher:
             )
 
 
-def make_runtime(app: App) -> DockerRuntime:
+def make_runtime(app: App) -> Runtime:
+    """Docker on Linux; on macOS the pinned native build, as a child process."""
+    if app.os_name == "darwin":
+        return NativeRuntime(app.host, app.paths, out=app.out)
     return DockerRuntime(app.host)
 
 
@@ -346,6 +382,9 @@ def add_launch_arguments(parser: argparse.ArgumentParser) -> None:
         const=False,
         help="no chat log this time",
     )
+    parser.add_argument(
+        "--no-tools", action="store_true", help="do not open the coding tools this time"
+    )
 
 
 def run_launch(app: App, args: argparse.Namespace) -> int:
@@ -361,30 +400,33 @@ def run_launch(app: App, args: argparse.Namespace) -> int:
             app.say(problem)
         raise LaunchError(f"{name} cannot start until the problems above are fixed")
     chat = getattr(args, "chat_log", None)
-    if not args.here and _hop_to_terminal(app, profile, chat):
+    tools = not getattr(args, "no_tools", False)
+    if not args.here and _hop_to_terminal(app, profile, chat, tools):
         return 0  # the new window asks about the image, where there is someone to answer
     fetch_image(app, runtime, profile, prompter)
-    return Launcher(app, runtime, prompter).serve(profile, monitor=not args.no_monitor, chat=chat)
+    return Launcher(app, runtime, prompter).serve(
+        profile, monitor=not args.no_monitor, chat=chat, tools=tools
+    )
 
 
-def fetch_image(
-    app: App, runtime: DockerRuntime, profile: Profile, prompter: PlainPrompter
-) -> None:
+def fetch_image(app: App, runtime: Runtime, profile: Profile, prompter: PlainPrompter) -> None:
     """Download the llama.cpp image when it is gone, after asking."""
     reference = profile.runtime.image
     if runtime.image_present(reference):
         return
-    app.say(f"The model server (llama.cpp image {reference.split('@')[0]}) is not on this machine.")
-    if not prompter.confirm("Download it now (a few GB)?", default=True):
+    app.say(f"The model server ({runtime.describe(reference)}) is not on this machine.")
+    if not prompter.confirm(f"Download it now ({runtime.download_size(reference)})?", default=True):
         raise LaunchError(
             f"{profile.name} needs the model server to start",
             hint=f"Download it with: ornith-launcher setup --repair {profile.name}",
         )
     runtime.pull(reference)
-    record(app.paths, "images", reference)
+    record(app.paths, runtime.record_kind, reference)
 
 
-def _hop_to_terminal(app: App, profile: Profile, chat: bool | None = None) -> bool:
+def _hop_to_terminal(
+    app: App, profile: Profile, chat: bool | None = None, tools: bool = True
+) -> bool:
     """Open the chosen terminal and run there, unless this already is that terminal."""
     terminal_id = profile.terminal.get("id") or THIS_TERMINAL
     if terminal_id == THIS_TERMINAL:
@@ -392,13 +434,15 @@ def _hop_to_terminal(app: App, profile: Profile, chat: bool | None = None) -> bo
     interactive = getattr(app.out, "isatty", lambda: False)()
     if interactive and runs_in(terminal_id, app.env):
         return False
-    terminal = by_id(terminal_id, detect_terminals(app.host))
+    terminal = by_id(terminal_id, detect_terminals(app.host, app.os_name))
     if terminal is None:
         app.say(f"The terminal {terminal_id} is no longer installed; running here instead.")
         return False
     command = [*self_command(), "launch", profile.name, "--here"]
     if chat is not None:
         command.append("--chat-log" if chat else "--no-chat-log")
+    if not tools:
+        command.append("--no-tools")
     if open_in_terminal(app.host, terminal, command, f"Ornith: {profile.name}"):
         app.say(f"Opened {profile.name} in {terminal.name}.")
         return True
@@ -453,15 +497,13 @@ def run_status(app: App, args: argparse.Namespace) -> int:
         rows.append(
             [name, container.state, health, profile.url, context_label(profile.runtime.context)]
         )
-    app.say(table(["Profile", "Container", "Server", "URL", "Context"], rows))
-    memory = parse_meminfo(app.host.read_text("/proc/meminfo") or "")
+    app.say(table(["Profile", runtime.state_column, "Server", "URL", "Context"], rows))
+    memory = read_meminfo(app.host)
     if "MemAvailable" in memory:
         app.say(f"Memory free: {memory['MemAvailable'] / GIB:.0f} GiB")
     if getattr(args, "verbose_command", False):
-        from ornith_launcher.runtime.docker import run_args
-
         for name in names:
-            app.say(" ".join(run_args(load_profile(app.paths, name))))
+            app.say(" ".join(runtime.command(load_profile(app.paths, name))))
     return 0
 
 

@@ -18,8 +18,9 @@ labels: bug
 
 - ornith-launcher version (`./ornith-launcher --version`):
 - OS and version:
-- CPU architecture (x86-64 or arm64):
-- GPU and driver version:
+- CPU architecture (x86-64 or arm64; on a Mac, the chip, for example M2):
+- GPU and driver version (Linux):
+- Memory (RAM, or unified memory):
 - Python version (`python3 --version`):
 - Terminal app (for example GNOME Terminal or Konsole):
 - Docker version, Linux only (`docker --version`):

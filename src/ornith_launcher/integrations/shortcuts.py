@@ -1,4 +1,5 @@
-"""Desktop shortcuts that launch a profile with a double-click (Linux ``.desktop`` files).
+"""Desktop shortcuts that launch a profile with a double-click: Linux ``.desktop`` files,
+and on macOS ``.command`` files, which Finder opens in Terminal.
 
 ``Terminal=false`` when a terminal was chosen: the launcher opens it itself. A
 profile that runs in "this terminal" gets ``Terminal=true`` instead, or a click
@@ -102,3 +103,23 @@ def write_shortcut(path: Path, content: str) -> None:
 
 def shell_command(command: Sequence[str]) -> str:
     return shlex.join(command)
+
+
+# macOS ----------------------------------------------------------------------------------
+
+
+def command_file(profile: str, command: Sequence[str]) -> str:
+    """A ``.command`` file: Finder runs it in Terminal, and launch opens the chosen terminal."""
+    return (
+        "#!/bin/sh\n"
+        f"# Ornith: {profile}, made by ornith-launcher (unofficial); safe to delete.\n"
+        f"exec {shell_command([*command, 'launch', profile])}\n"
+    )
+
+
+def command_file_name(profile: str) -> str:
+    return f"Ornith {profile}.command"
+
+
+def mac_applications_dir(home: Path) -> Path:
+    return home / "Applications"

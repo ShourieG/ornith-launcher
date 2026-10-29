@@ -10,7 +10,7 @@ downloads, and the checks the owner completes before the repository goes public.
 | Our code, docs, benchmark data, the catalog of Hugging Face metadata | Yes | Apache-2.0 |
 | Model weights (GGUF files) | No. Users download them from Hugging Face | Each model's own licence |
 | Chat templates | No copies. The project ships transformation rules and hashes | Not applicable (the rules are our code) |
-| llama.cpp | No. Users pull the Docker image from ghcr.io | MIT (ggml.org) |
+| llama.cpp | No. On Linux the user's machine pulls the Docker image from ghcr.io; on macOS it downloads the release build from GitHub | MIT (ggml.org) |
 | Claude Code, OpenCode, Docker, NVIDIA Container Toolkit | No. The launcher links to or runs their official installers, with consent | Their own terms |
 | Benchmark test text | No. Built on the user's machine from `/usr/share/doc` | Mixed, not ours |
 
@@ -22,10 +22,11 @@ Hugging Face instead.
 ## Licences of what users download
 
 - Ornith 1.0 and 1.5 (every official repository) declare MIT in their metadata and model cards. The LICENSE file
-  the cards link to is missing in every repository (HTTP 404, checked on 2026-10-12, 2026-10-18 and again on
-  2026-10-25 for the 1.5 122B). The project has asked, or will ask, Ornith AI to publish it.
-- The Ornith cards name Qwen3.5 (Apache-2.0) and Gemma 4 as the base models. The Gemma 4 licence has not yet been
-  checked against Google's own terms; see the checklist below.
+  the cards link to is missing in every repository (HTTP 404, checked on 2026-10-12, 2026-10-18, 2026-10-25 for
+  the 1.5 122B, and 2026-10-29). The project has asked, or will ask, Ornith AI to publish it.
+- The Ornith cards name Qwen3.5 (Apache-2.0) and Gemma 4 as the base models. Google's own Gemma 4 repositories on
+  Hugging Face (`google/gemma-4-31B-it`, `google/gemma-4-26B-A4B-it`, `google/gemma-4-E4B-it`) declare
+  Apache-2.0 in their metadata (checked on 2026-10-29).
 - Community GGUF builds each declare their own licence (MIT, Apache-2.0, "other" or none). The launcher shows it
   on every row and asks for an explicit confirmation when a model declares "other" or nothing.
 - llama.cpp: MIT.
@@ -89,7 +90,8 @@ matters before going public.
       history. `ideate/` was never committed: `git log --all -- ideate` prints nothing.
 - [ ] No logos of Ornith AI, Anthropic, OpenCode or others anywhere (README, icons, shortcuts).
 - [ ] `CREDITS.md` names everyone the project builds on, with links and licences.
-- [ ] The Gemma 4 licence claim was checked against Google's own page, or reworded.
+- [ ] The Gemma 4 licence claim was checked against Google's own page, or reworded. (Google's Hugging Face
+      repositories declare Apache-2.0, checked 2026-10-29.)
 - [ ] Uncensored models need the typed confirmation, and `--yes` does not bypass it.
 - [ ] "Only uncensored models" needs the opt-in and shows the warning, and the disclaimer says the uncensored
       label is a best-effort guess from names, tags and lineage.
@@ -99,4 +101,7 @@ matters before going public.
 - [ ] The Anthropic "not supported" sentence is quoted in the disclaimer and on the Claude Code option.
 - [ ] Every benchmark number carries TESTED, INFERRED or ESTIMATED.
 - [ ] The post to Ornith AI has been made, and any reply has been handled.
-- [ ] The macOS and Windows CI jobs are re-enabled in `.github/workflows/ci.yml` and green.
+- [ ] The macOS CI job is re-enabled in `.github/workflows/ci.yml` and green. (Windows is not part of the first
+      release.)
+- [ ] The launcher has run on a real Mac (setup, launch, the desktop icon, `bench`, uninstall), and the README,
+      `docs/HARDWARE.md` and the macOS notes say what was tested.

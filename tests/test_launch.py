@@ -67,7 +67,7 @@ class TerminalTest(unittest.TestCase):
     def test_detection_order(self):
         programs = {"konsole": "/usr/bin/konsole", "gnome-terminal": "/usr/bin/gnome-terminal"}
         host = FakeHost(env={"TERMINAL": "konsole"}, programs=dict(programs))
-        self.assertEqual(detect_terminals(host).default.id, "konsole")
+        self.assertEqual(detect_terminals(host, "linux").default.id, "konsole")
         gnome = FakeHost(
             env={"XDG_CURRENT_DESKTOP": "ubuntu:GNOME"},
             programs={
@@ -85,14 +85,14 @@ class TerminalTest(unittest.TestCase):
             },
             links={"/usr/bin/x-terminal-emulator": "/usr/bin/gnome-terminal.wrapper"},
         )
-        found = detect_terminals(gnome)
+        found = detect_terminals(gnome, "linux")
         self.assertEqual(found.default.id, "gnome-terminal")
         self.assertEqual({t.id for t in found.installed}, {"konsole", "gnome-terminal"})
-        self.assertIsNone(detect_terminals(FakeHost()).default)
+        self.assertIsNone(detect_terminals(FakeHost(), "linux").default)
 
     def test_command_and_current_terminal(self):
         host = FakeHost(programs={"konsole": "/usr/bin/konsole"})
-        konsole = detect_terminals(host).default
+        konsole = detect_terminals(host, "linux").default
         self.assertEqual(
             konsole.command(["ornith-launcher", "launch", "p", "--here"], "Ornith: p"),
             [
@@ -761,8 +761,8 @@ class SetupProfileTest(unittest.TestCase):
         from ornith_launcher.ui.prompts import Cancelled
 
         case = self.case
-        # both coding tools, then quit at the terminal question
-        wizard, selection, host, prompter = self.prepare("4")
+        # both coding tools and OpenCode's default model, then quit at the terminal question
+        wizard, selection, host, prompter = self.prepare("4", "y")
         host.programs.update({"claude": "/usr/bin/claude", "opencode": "/usr/bin/opencode"})
         opencode_file = case.home / ".config" / "opencode" / "opencode.json"
         opencode_file.parent.mkdir(parents=True)

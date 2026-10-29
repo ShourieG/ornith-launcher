@@ -33,7 +33,7 @@ class UninstallTest(unittest.TestCase):
             machine="aarch64",
             full_screen=False,
         )
-        self.models = self.home / ".ornith-launcher" / "models"
+        self.models = self.home / "models" / "ornith-launcher"
         # A setup with a downloaded model, a desktop icon and a menu entry.
         self.downloaded = self.download("ornith-ai/Ornith-1.5-9B-GGUF@abc1234/m-Q8_0.gguf")
         self.icon = self.shortcut(self.home / "Desktop" / "ornith-launcher-nine.desktop")
@@ -81,13 +81,29 @@ class UninstallTest(unittest.TestCase):
         self.app.read_line = read_line
         return cli.main(["uninstall"], app=self.app)
 
+    def test_setup_only_keeps_the_model_it_downloaded(self):
+        removal = plan_removal(self.app, [self.nine], keep_models=True)
+        self.assertEqual(removal.model_files, [])
+        self.assertEqual(removal.kept_by_choice, [self.downloaded])
+        # Remove one setup, "nine" (the second), Setup only (the default), confirm.
+        self.assertEqual(self.uninstall("1", "2", "", "y"), 0)
+        self.assertEqual(list_profiles(self.app.paths), ["found"])
+        self.assertFalse(self.icon.exists())
+        self.assertFalse(self.menu.exists())
+        self.assertTrue(self.downloaded.exists())
+        # Still recorded as ours, so "Remove everything" can delete it later.
+        self.assertIn(str(self.downloaded), load_installed(self.app.paths).downloads)
+        text = self.out.getvalue()
+        self.assertIn("profile, launch icon and menu entry; the model stays", text)
+        self.assertIn("Kept (you chose to keep the model)\n  " + str(self.downloaded), text)
+
     def test_one_setup_removes_its_icon_menu_entry_and_download(self):
         removal = plan_removal(self.app, [self.nine])
         self.assertEqual(removal.model_files, [self.downloaded])
         self.assertEqual(set(removal.shortcuts), {self.icon, self.menu})
         self.assertEqual(removal.images, [])  # only "everything" touches the image
-        # Remove one setup, the second one ("found" sorts first), its setup part, confirm.
-        self.assertEqual(self.uninstall("1", "2", "1", "y"), 0)
+        # Remove one setup, the second one ("found" sorts first), setup and model, confirm.
+        self.assertEqual(self.uninstall("1", "2", "2", "y"), 0)
         for path in (self.downloaded, self.icon, self.menu):
             self.assertFalse(path.exists(), path)
         self.assertFalse(self.downloaded.parent.exists())  # its empty folder too
@@ -106,26 +122,28 @@ class UninstallTest(unittest.TestCase):
         config = self.home / ".config" / "opencode" / "opencode.json"
         config.parent.mkdir(parents=True)
         mine = {"provider": {"my-own": {"models": {"m": {}}}}}
-        config.write_text(json.dumps(opencode.merged(mine, self.nine, "ornith", "Ornith 9B")))
+        pictures = self.home / "data" / "opencode" / opencode.PICTURES_NAME
+        merged = opencode.merged(mine, self.nine, "ornith-launcher", "Ornith 9B", pictures)
+        config.write_text(json.dumps(merged))
         wrapper = self.home / ".local" / "bin" / "ornith-claude-nine"
         wrapper.parent.mkdir(parents=True)
         wrapper.write_text("#!/bin/sh\n")
         self.nine.integrations.update(
-            opencode={"config": str(config), "provider": "ornith"},
+            opencode={"config": str(config), "provider": "ornith-launcher"},
             claude_code={"wrapper": str(wrapper)},
         )
         save_profile(self.app.paths, self.nine)
-        # one setup, "nine", its setup part, confirm
+        # one setup, "nine", setup only, confirm
         self.assertEqual(self.uninstall("1", "2", "1", "y"), 0)
         text = self.out.getvalue()
-        self.assertIn("OpenCode entry, Claude Code wrapper and the model it downloaded", text)
+        self.assertIn("menu entry, OpenCode entry and Claude Code wrapper; the model stays", text)
         listed = text[text.index("Coding-tool settings") :]
         alias = self.nine.runtime.alias
-        self.assertIn(f"OpenCode: the model {alias} (provider ornith) in {config}", listed)
+        self.assertIn(f"OpenCode: the model {alias} (provider ornith-launcher) in {config}", listed)
+        self.assertIn(f"OpenCode: the picture instructions {pictures}, which go with the", listed)
         self.assertIn(f"Claude Code: {wrapper}", listed)
-        self.assertEqual(
-            json.loads(config.read_text())["provider"], mine["provider"]
-        )  # only ours went
+        left = json.loads(config.read_text())
+        self.assertEqual((left["provider"], left.get("instructions")), (mine["provider"], None))
         self.assertFalse(wrapper.exists())
 
     def only_found(self):
@@ -138,19 +156,21 @@ class UninstallTest(unittest.TestCase):
         self.only_found()
         model = Path(self.found.model.path)
         # one setup, "found", the model server only, confirm
-        self.assertEqual(self.uninstall("1", "1", "2", "y"), 0)
+        self.assertEqual(self.uninstall("1", "1", "3", "y"), 0)
         self.assertIn(("docker", "image", "rm", digest_reference(IMAGE)), self.host.calls)
         self.assertIn(
             ("docker", "rm", "-f", "ornith-launcher-found"), self.host.calls
         )  # stopped first
         self.assertEqual(list_profiles(self.app.paths), ["found"])  # the setup stays
         self.assertTrue(model.exists())
-        self.assertIn("the model file stays where it is", self.out.getvalue())
+        self.assertIn(
+            "the model was found on this machine, so it is never deleted", self.out.getvalue()
+        )
 
     def test_both_removes_the_setup_and_the_server_but_never_the_model(self):
         self.only_found()
         model = Path(self.found.model.path)
-        self.assertEqual(self.uninstall("1", "1", "3", "y"), 0)
+        self.assertEqual(self.uninstall("1", "1", "4", "y"), 0)
         self.assertEqual(list_profiles(self.app.paths), [])
         self.assertIn(("docker", "image", "rm", digest_reference(IMAGE)), self.host.calls)
         self.assertTrue(model.exists())
@@ -158,7 +178,7 @@ class UninstallTest(unittest.TestCase):
 
     def test_the_server_is_not_offered_while_another_setup_needs_it(self):
         # "found" while "nine" uses the same image: picking the server is refused
-        self.assertEqual(self.uninstall("1", "1", "2", "1", "y"), 0)
+        self.assertEqual(self.uninstall("1", "1", "3", "1", "y"), 0)
         text = self.out.getvalue()
         self.assertIn("The model server is not offered: nine also needs it.", text)
         self.assertIn("That option is not available here.", text)
@@ -173,13 +193,39 @@ class UninstallTest(unittest.TestCase):
         self.uninstall("1", "1", "esc", "esc", "esc")
         self.assertIn("already on this machine before ornith-launcher", self.out.getvalue())
 
+    def test_a_found_model_that_the_launcher_downloaded_can_be_deleted(self):
+        # A finished download picked from setup's first menu was saved as "external".
+        self.nine.model.location = "external"
+        save_profile(self.app.paths, self.nine)
+        # one setup, "nine", Setup and its model, confirm
+        self.assertEqual(self.uninstall("1", "2", "2", "y"), 0)
+        self.assertNotIn("That option is not available here", self.out.getvalue())
+        self.assertFalse(self.downloaded.exists())
+        self.assertNotIn(str(self.downloaded), load_installed(self.app.paths).downloads)
+
+    def test_downloaded_here_needs_every_part_recorded(self):
+        from ornith_launcher.installed import downloaded_here
+
+        self.assertTrue(downloaded_here(self.app.paths, [str(self.downloaded)]))
+        both = [str(self.downloaded), self.found.model.path]
+        self.assertFalse(downloaded_here(self.app.paths, both))
+        self.assertFalse(downloaded_here(self.app.paths, []))
+
     def test_a_model_found_elsewhere_is_listed_as_kept(self):
         removal = plan_removal(self.app, [self.found])
         self.assertEqual(removal.model_files, [])
         self.assertEqual(removal.kept_models, [Path(self.found.model.path)])
 
+    def test_all_setups_can_keep_or_delete_their_models(self):
+        self.assertEqual(self.uninstall("2", "1", "y"), 0)  # setups only
+        self.assertEqual(list_profiles(self.app.paths), [])
+        self.assertTrue(self.downloaded.exists())
+        save_profile(self.app.paths, self.nine)
+        self.assertEqual(self.uninstall("2", "2", "y"), 0)  # setups and their models
+        self.assertFalse(self.downloaded.exists())
+
     def test_all_setups_keep_loose_downloads_and_the_image(self):
-        self.assertEqual(self.uninstall("2", "y"), 0)
+        self.assertEqual(self.uninstall("2", "2", "y"), 0)
         self.assertEqual(list_profiles(self.app.paths), [])
         self.assertTrue(self.loose.exists())
         self.assertIn(IMAGE, self.host.images)

@@ -21,11 +21,16 @@ from typing import Any
 from ornith_launcher.app import App
 from ornith_launcher.bench import needle
 from ornith_launcher.bench.corpus import build_corpus
-from ornith_launcher.bench.perplexity import parse_perplexity, perplexity_args
+from ornith_launcher.bench.perplexity import (
+    native_perplexity_args,
+    parse_perplexity,
+    perplexity_args,
+)
 from ornith_launcher.errors import OrnithLauncherError
 from ornith_launcher.launch import make_runtime, resolve_name
 from ornith_launcher.pins import load_pins
 from ornith_launcher.profiles import Profile, load_profile
+from ornith_launcher.runtime.native import PERPLEXITY
 from ornith_launcher.system.thermal import read_thermal
 
 HOT = 80.0
@@ -151,9 +156,13 @@ def run_bench(
             )
         wait_until_cool(temperature, sleep, app.say)
         app.say("Perplexity at 4096 tokens per chunk (several minutes)...")
-        result = app.host.run(
-            perplexity_args(profile, corpus.perplexity, profile.runtime.yarn_factor), timeout=7200
-        )
+        yarn = profile.runtime.yarn_factor
+        if runtime.kind == "native":
+            binary = runtime.tool(profile.runtime.image, PERPLEXITY)
+            argv = native_perplexity_args(binary, profile, corpus.perplexity, yarn)
+        else:
+            argv = perplexity_args(profile, corpus.perplexity, yarn)
+        result = app.host.run(argv, timeout=7200)
         log = (result.stdout + result.stderr) if result else ""
         value = parse_perplexity(log)
         if value is None:

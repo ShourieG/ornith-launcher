@@ -38,6 +38,7 @@ from ornith_launcher.planner.rank import (
     rank,
     suggest,
 )
+from ornith_launcher.runtime.native import runtime_root
 from ornith_launcher.system.report import SystemReport, check_system
 from ornith_launcher.ui.plain import context_label, gib, table
 
@@ -80,7 +81,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 def make_plan(app: App, *, refresh: bool = False, show_uncensored: bool = False) -> Plan:
     families = load_families()
     rules: Rules = load_rules()
-    report = check_system(app.host, load_pins(), system=app.os_name, machine=app.machine)
+    report = check_system(
+        app.host,
+        load_pins(),
+        system=app.os_name,
+        machine=app.machine,
+        runtime_root=runtime_root(app.paths),
+    )
     if refresh:
         catalog = refresh_catalog(app, load_for_refresh(app.paths.catalog_file), families)
     else:
@@ -158,7 +165,13 @@ def print_system(app: App, report: SystemReport) -> None:
     image = report.flavour.image.flavour if report.flavour else "none"
     app.say(f"System: {p.os} {p.arch}, Python {report.python}")
     app.say(f"GPU:    {gpus or 'none found'}")
-    app.say(f"Docker: {docker_text}; llama.cpp image: {image}")
+    if report.native is not None:
+        backend = "Metal" if report.gpus else "CPU only"
+        app.say(
+            f"Runtime: llama.cpp {report.native.build} ({report.native.key}, {backend}), no Docker"
+        )
+    elif p.os != "darwin":
+        app.say(f"Docker: {docker_text}; llama.cpp image: {image}")
     for pool in report.pools:
         app.say(
             f"Memory: {pool.name}: {gib(pool.total)}, about {gib(pool.baseline)} in use by the "

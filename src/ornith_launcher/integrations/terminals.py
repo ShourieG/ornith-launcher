@@ -4,14 +4,21 @@ The launcher opens the chosen terminal detached (a new session), because some
 terminals stay in the foreground and would block it, and passes everything on
 the command line, because Konsole may hand the command to an existing process
 with a different environment.
+
+On macOS, Terminal and iTerm2 are given a small ``.command`` script to open
+(``open -a Terminal``). That needs no AppleScript, so macOS never asks for
+Automation permission; the script deletes itself as it starts.
 """
 
 from __future__ import annotations
 
 import os
+import platform
 import shlex
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from ornith_launcher.system.host import Host
 
@@ -23,6 +30,7 @@ class Terminal:
     id: str
     name: str
     argv: tuple[str, ...]  # prefix before the command; "{title}" is replaced
+    opens_file: bool = False  # macOS apps: given a .command script instead of the command
 
     def command(self, command: Sequence[str], title: str) -> list[str]:
         prefix = [part.replace("{title}", title) for part in self.argv]
@@ -47,6 +55,11 @@ KNOWN = (
     Terminal("xterm", "xterm", ("xterm", "-T", "{title}", "-e")),
 )
 _BY_ID = {t.id: t for t in KNOWN}
+# macOS: the system's Terminal is always there; iTerm2 when installed; and the
+# terminals above that run the same way on a Mac.
+MAC_TERMINAL = Terminal("terminal-app", "Terminal", ("open", "-a", "Terminal"), opens_file=True)
+ITERM = Terminal("iterm2", "iTerm2", ("open", "-a", "iTerm"), opens_file=True)
+_MAC_CLI = ("kitty", "alacritty", "wezterm")
 # Names that resolve to a known terminal, e.g. Debian's x-terminal-emulator alternative.
 _ALIASES = {"gnome-terminal.wrapper": "gnome-terminal", "konsole5": "konsole"}
 
@@ -57,9 +70,22 @@ class Terminals:
     installed: tuple[Terminal, ...]
 
 
-def detect_terminals(host: Host) -> Terminals:
+def detect_terminals(host: Host, os_name: str | None = None) -> Terminals:
+    if (os_name or platform.system().lower()) == "darwin":
+        return _detect_mac(host)
     installed = tuple(t for t in KNOWN if host.which(t.argv[0]))
     return Terminals(default=_default(host, installed), installed=installed)
+
+
+def _detect_mac(host: Host) -> Terminals:
+    home = host.env.get("HOME", "")
+    installed = [MAC_TERMINAL]
+    if host.exists("/Applications/iTerm.app") or (
+        home and host.exists(f"{home}/Applications/iTerm.app")
+    ):
+        installed.append(ITERM)
+    installed += [t for t in KNOWN if t.id in _MAC_CLI and host.which(t.argv[0])]
+    return Terminals(default=MAC_TERMINAL, installed=tuple(installed))
 
 
 def _default(host: Host, installed: tuple[Terminal, ...]) -> Terminal | None:
@@ -126,6 +152,11 @@ def current_terminal(env: Mapping[str, str]) -> str | None:
         return "tilix"
     if env.get("TERMINATOR_UUID"):
         return "terminator"
+    program = env.get("TERM_PROGRAM")  # set by the macOS terminals
+    if program == "Apple_Terminal":
+        return MAC_TERMINAL.id
+    if program == "iTerm.app":
+        return ITERM.id
     if env.get("VTE_VERSION"):
         return "vte"  # one of several VTE-based terminals; which one is not known
     return None
@@ -141,4 +172,24 @@ def runs_in(terminal_id: str, env: Mapping[str, str]) -> bool:
 
 
 def open_in_terminal(host: Host, terminal: Terminal, command: Sequence[str], title: str) -> bool:
+    if terminal.opens_file:
+        return host.spawn([*terminal.argv, str(write_command_script(command, title))])
     return host.spawn(terminal.command(command, title))
+
+
+def command_script(command: Sequence[str], title: str) -> str:
+    """The script a macOS terminal app opens: remove itself, set the title, run the command."""
+    return (
+        "#!/bin/sh\n"
+        'rm -f "$0"\n'
+        f"printf '\\033]0;%s\\007' {shlex.quote(title)}\n"
+        f"exec {shlex.join(command)}\n"
+    )
+
+
+def write_command_script(command: Sequence[str], title: str) -> Path:
+    handle, name = tempfile.mkstemp(prefix="ornith-launcher-", suffix=".command")
+    with os.fdopen(handle, "w", encoding="utf-8") as script:
+        script.write(command_script(command, title))
+    os.chmod(name, 0o700)
+    return Path(name)

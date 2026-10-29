@@ -55,7 +55,7 @@ class SearchTest(unittest.TestCase):
 
     def locations(self, env=None, extra=()):
         return search_locations(
-            env or {}, self.home, "linux", self.home / ".ornith-launcher" / "models", extra
+            env or {}, self.home, "linux", self.home / "models" / "ornith-launcher", extra
         )
 
     def test_hugging_face_cache_uses_the_blob_name_as_checksum(self):

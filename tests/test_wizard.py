@@ -109,7 +109,7 @@ class WizardTest(unittest.TestCase):
         self.assertEqual(selection.entry.repo.id, "ornith-ai/Ornith-1.5-35B-A3B-GGUF")
         self.assertEqual(selection.candidate.context, 262144)
         self.assertEqual(selection.port, 18400)
-        models = self.home / ".ornith-launcher" / "models"
+        models = self.home / "models" / "ornith-launcher"
         folder = models / "ornith-ai" / f"Ornith-1.5-35B-A3B-GGUF@{'a' * 7}"
         self.assertEqual(selection.model_paths, [folder / "Ornith-1.5-35B-Q8_0.gguf"])
         self.assertEqual(selection.mmproj_path, folder / "mmproj-BF16.gguf")
@@ -121,7 +121,7 @@ class WizardTest(unittest.TestCase):
         self.assertEqual(load_settings(self.app.paths).disclaimer_version, disclaimer_text()[0])
         text = self.out.getvalue()
         self.assertIn("not affiliated", text)
-        self.assertIn("This folder is hidden", text)
+        self.assertNotIn("This folder is hidden", text)  # the default folder is visible
         self.assertIn("No Ornith models found in the usual places.", text)
         # Each file says what it is for; the vision file can be left out in the settings.
         self.assertRegex(text, r"Vision\s+on: adds a 0\.8 GiB vision file so the model")
@@ -183,7 +183,7 @@ class WizardTest(unittest.TestCase):
         wizard.downloader_factory = self.pausing()
         with self.assertRaises(Cancelled):
             wizard.run()
-        folder = self.home / ".ornith-launcher" / "models" / "ornith-ai"
+        folder = self.home / "models" / "ornith-launcher" / "ornith-ai"
         self.assertFalse(folder.exists())  # the files and their empty folders
         self.assertEqual(load_installed(self.app.paths).downloads, [])
         model = folder / f"Ornith-1.5-35B-A3B-GGUF@{'a' * 7}"
@@ -233,7 +233,7 @@ class WizardTest(unittest.TestCase):
         from ornith_launcher.unfinished import save_choices
 
         save_settings(self.app.paths, Settings(disclaimer_version=disclaimer_text()[0]))
-        folder = self.home / ".ornith-launcher" / "models" / "ornith-ai"
+        folder = self.home / "models" / "ornith-launcher" / "ornith-ai"
         folder = folder / f"Ornith-1.5-35B-A3B-GGUF@{'a' * 7}"
         self.stopped_download(folder, "Ornith-1.5-35B-Q8_0.gguf")
         earlier = {"file": "Ornith-1.5-35B-Q8_0.gguf", "context": 262144, "kv_type": "f16"}
@@ -322,7 +322,7 @@ class WizardTest(unittest.TestCase):
 
     def test_quitting_setup_says_a_stopped_download_is_kept(self):
         save_settings(self.app.paths, Settings(disclaimer_version=disclaimer_text()[0]))
-        models = self.home / ".ornith-launcher" / "models"
+        models = self.home / "models" / "ornith-launcher"
         part = self.stopped_download(models / "ornith-ai" / "Ornith-1.5-9B-GGUF@abc1234", "m.gguf")
         self.app.read_line = lambda prompt: "q"
         self.assertEqual(cli.main(["setup", "--plain"], app=self.app), 1)
@@ -331,7 +331,7 @@ class WizardTest(unittest.TestCase):
 
     def test_a_stopped_download_no_longer_listed_says_how_to_remove_it(self):
         save_settings(self.app.paths, Settings(disclaimer_version=disclaimer_text()[0]))
-        models = self.home / ".ornith-launcher" / "models"
+        models = self.home / "models" / "ornith-launcher"
         self.stopped_download(models / "gone-uploader" / "Removed-Repo-GGUF@1234567", "x.gguf")
         with self.assertRaises(Cancelled):
             self.wizard(["r", "1", "esc", "q"]).run()
@@ -1111,6 +1111,12 @@ class PieceTest(unittest.TestCase):
         )
         self.assertIn("Cmd+Shift+.", hidden_notice(Path("/h/.x"), Path("/h"), "darwin"))
         self.assertIsNone(hidden_notice(Path("/h/models"), Path("/h"), "linux"))
+        # The default folder is visible, so the notice can suggest it.
+        self.assertIsNone(hidden_notice(Path("/h/models/ornith-launcher"), Path("/h"), "darwin"))
+        self.assertIn(
+            "for example /h/models/ornith-launcher",
+            hidden_notice(Path("/h/.x"), Path("/h"), "linux"),
+        )
         self.assertIsNone(hidden_notice(Path("C:/h/.x"), Path("C:/h"), "windows"))
 
     def test_plain_prompter(self):
@@ -1231,6 +1237,23 @@ class PieceTest(unittest.TestCase):
         self.assertEqual(picked, "n")
         with self.assertRaises(ValueError):
             PlainPrompter().choose("T", ["N"], [], keys={"p": "custom path"}, previous_page=True)
+
+    def test_enter_on_a_greyed_out_row_says_why_instead_of_doing_nothing(self):
+        from contextlib import nullcontext
+
+        from ornith_launcher.ui import tui
+
+        keys = iter(["down", "enter", "up", "enter"])
+        out = io.StringIO()
+        with mock.patch.object(tui, "read_key", lambda timeout=None: next(keys)):
+            with mock.patch.object(tui, "raw_keys", nullcontext):
+                choices = [Choice(("on",)), Choice(("off",), enabled=False)]
+                picked = tui.TuiPrompter(out=out).choose("T", ["N"], choices)
+        self.assertEqual(picked, 0)
+        frames = out.getvalue().split(tui.CLEAR)
+        message = "That option is not available here; its note says why."
+        self.assertIn(message, frames[3])  # drawn right after Enter on "off"
+        self.assertNotIn(message, frames[4])  # and gone after the next key
 
     def test_warnings_wrap_on_a_terminal_only(self):
         class Terminal(io.StringIO):

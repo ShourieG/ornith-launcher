@@ -21,8 +21,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from ornith_launcher.errors import OrnithLauncherError
 from ornith_launcher.profiles import Profile
+from ornith_launcher.runtime.api import ServerApi, ServerError
 from ornith_launcher.runtime.http import Http, UrllibHttp
 from ornith_launcher.runtime.server import (
     CONTAINER_PORT,
@@ -41,10 +41,6 @@ BOOT_TIMEOUT = 600.0
 POLL = 3.0
 # Images of other model servers that would compete for the same memory.
 _OTHER_SERVERS = re.compile(r"vllm|sglang|llama|ollama|text-generation|tgi|trtllm|lmdeploy", re.I)
-
-
-class ServerError(OrnithLauncherError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -187,12 +183,35 @@ def parse_fit_params(text: str) -> FitCheck | None:
 
 
 @dataclass
-class DockerRuntime:
+class DockerRuntime(ServerApi):
     host: Host
     http: Http = field(default_factory=UrllibHttp)
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     _ports: dict[str, int] = field(default_factory=dict)  # container -> port on 127.0.0.1
+
+    # How the rest of the launcher names what this backend runs.
+    kind = "docker"
+    record_kind = "images"  # the key in installed.json
+    state_column = "Container"
+    server_noun = "llama.cpp image"
+    fetched = "pulled"
+
+    def describe(self, reference: str) -> str:
+        return f"llama.cpp image {reference.split('@')[0]}"
+
+    def download_size(self, reference: str) -> str:
+        return "a few GB"
+
+    def same_reference(self, one: str, other: str) -> bool:
+        return digest_reference(one) == digest_reference(other)
+
+    def command(self, profile: Profile) -> list[str]:
+        """The full command that starts this profile's server (``status --command``)."""
+        return run_args(profile)
+
+    def log_command(self, profile: Profile) -> str:
+        return f"docker logs {container_name(profile.name)}"
 
     # Images -----------------------------------------------------------------------------
 
@@ -325,11 +344,6 @@ class DockerRuntime:
                 return int(port)
         return None
 
-    def api_url(self, profile: Profile) -> str:
-        """The server's own URL: the profile's, unless the chat log proxy sits in front."""
-        port = self.host_port(profile)
-        return f"http://127.0.0.1:{port}" if port else profile.url
-
     def logs(self, name: str, tail: int = 30) -> str:
         result = self.host.run(["docker", "logs", "--tail", str(tail), name], timeout=30)
         if result is None:
@@ -380,49 +394,6 @@ class DockerRuntime:
                     on_line(f"[{self.clock() - started:4.0f}s] {line}")
                     last = line
             self.sleep(POLL)
-
-    def warm_up(self, profile: Profile) -> float:
-        started = self.clock()
-        reply = self.http.post_json(
-            f"{self.api_url(profile)}/v1/chat/completions",
-            {
-                "model": profile.runtime.alias,
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": "Reply with: ready"}],
-            },
-        )
-        if reply.status != 200:
-            raise ServerError(
-                f"the warm-up request failed (HTTP {reply.status}): {reply.text[:200]}",
-                hint=f"See the server log: docker logs {container_name(profile.name)}",
-            )
-        return self.clock() - started
-
-    def verify(self, profile: Profile) -> list[str]:
-        """Differences between what runs and what the profile asked for (empty when all match)."""
-        problems = []
-        url = self.api_url(profile)
-        props = self.http.get(f"{url}/props").json() or {}
-        n_ctx = (props.get("default_generation_settings") or {}).get("n_ctx")
-        if n_ctx is not None and n_ctx != profile.runtime.context:
-            problems.append(f"context is {n_ctx}, expected {profile.runtime.context}")
-        models = self.http.get(f"{url}/v1/models").json() or {}
-        ids = [m.get("id") for m in models.get("data") or []]
-        if ids and profile.runtime.alias not in ids:
-            problems.append(f"model name is {ids[0]}, expected {profile.runtime.alias}")
-        return problems
-
-    def requests_in_progress(self, profile: Profile) -> int | None:
-        reply = self.http.get(f"{self.api_url(profile)}/metrics", timeout=2)
-        if reply.status != 200:
-            return None
-        for line in reply.text.splitlines():
-            if line.startswith("llamacpp:requests_processing"):
-                try:
-                    return int(float(line.split()[-1]))
-                except ValueError:
-                    return None
-        return None
 
     def fit_check(self, profile: Profile) -> FitCheck | None:
         result = self.host.run(fit_check_args(profile), timeout=300)

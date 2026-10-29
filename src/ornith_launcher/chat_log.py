@@ -40,7 +40,7 @@ from ornith_launcher.integrations.terminals import (
 from ornith_launcher.profiles import Profile
 from ornith_launcher.runtime.chat_capture import ChatView
 from ornith_launcher.runtime.chat_proxy import KEEP_EXCHANGES, TOKEN_HEADER, VIEW_PATH, ChatProxy
-from ornith_launcher.runtime.docker import DockerRuntime
+from ornith_launcher.runtime.native import Runtime
 
 PROXY_COMMAND = "chat-proxy"  # the hidden command the proxy process runs
 IN_WINDOW = "--in-window"  # the flag the window's own process runs with
@@ -155,7 +155,7 @@ def shutdown(app: App, profile_name: str) -> None:
         app.host.terminate(pid)
 
 
-def run_proxy(app: App, runtime: DockerRuntime, profile: Profile) -> int:
+def run_proxy(app: App, runtime: Runtime, profile: Profile) -> int:
     """The proxy process: forward the profile's port to the server until it stops."""
     proxy = ChatProxy(
         upstream=lambda: runtime.host_port(profile, cached=False), token=secrets.token_urlsafe(24)
@@ -185,7 +185,7 @@ def run_proxy(app: App, runtime: DockerRuntime, profile: Profile) -> int:
     return 0
 
 
-def _watch(runtime: DockerRuntime, profile: Profile, sleep=time.sleep) -> None:
+def _watch(runtime: Runtime, profile: Profile, sleep=time.sleep) -> None:
     """Return once the server has stopped (two checks in a row, to ride out a restart)."""
     gone = 0
     while gone < 2:
@@ -198,7 +198,7 @@ def _watch(runtime: DockerRuntime, profile: Profile, sleep=time.sleep) -> None:
 
 def log_terminal(app: App, profile: Profile) -> Terminal | None:
     """The server window's terminal app, else the system default one."""
-    terminals = detect_terminals(app.host)
+    terminals = detect_terminals(app.host, app.os_name)
     terminal_id = profile.terminal.get("id")
     if terminal_id and terminal_id != THIS_TERMINAL:
         found = by_id(terminal_id, terminals)
@@ -232,7 +232,7 @@ def open_window(app: App, profile: Profile) -> bool:
 
 def follow(
     app: App,
-    runtime: DockerRuntime,
+    runtime: Runtime,
     profile: Profile,
     in_window: bool = False,
     sleep: Callable[[float], None] = time.sleep,
@@ -257,7 +257,7 @@ def follow(
 
 def _follow(
     app: App,
-    runtime: DockerRuntime,
+    runtime: Runtime,
     profile: Profile,
     in_window: bool,
     sleep: Callable[[float], None],
@@ -285,7 +285,7 @@ def _follow(
 
 
 def _wait_for_proxy(
-    app: App, runtime: DockerRuntime, profile: Profile, sleep: Callable[[float], None]
+    app: App, runtime: Runtime, profile: Profile, sleep: Callable[[float], None]
 ) -> dict[str, Any] | None:
     """The proxy's run file once it listens; None (and why) when it will not come."""
     waited = 0

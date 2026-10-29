@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 
 
-@unittest.skipUnless(os.environ.get("ORNITH_IT") == "1", "set ORNITH_IT=1 to run integration tests")
+@unittest.skipUnless(
+    os.environ.get("ORNITH_IT") == "1" and sys.platform != "darwin",
+    "set ORNITH_IT=1 to run integration tests (macOS runs without Docker)",
+)
 class DockerTest(unittest.TestCase):
     def test_docker_daemon_is_reachable(self):
         docker = shutil.which("docker")

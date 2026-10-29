@@ -44,7 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = commands.add_parser("status", help="what is running, and the models folder")
     launch.add_name_argument(status_parser)
     status_parser.add_argument(
-        "--command", dest="verbose_command", action="store_true", help="show the docker command"
+        "--command",
+        dest="verbose_command",
+        action="store_true",
+        help="show the command that starts the server",
     )
     status_parser.set_defaults(handler=launch.run_status)
 

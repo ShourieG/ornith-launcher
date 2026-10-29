@@ -1522,12 +1522,21 @@ class Wizard:
         if cls.source is Source.COMMUNITY:
             rows.append(("Note", THIRD_PARTY_NOTE))
         flavour = self.plan.report.flavour if self.plan else None
+        native = self.plan.report.native if self.plan else None
         if flavour is not None:
             rows.append(
                 (
                     "Runtime",
                     f"llama.cpp {flavour.image.tag} in Docker (downloaded once if missing, "
                     "a few GB)",
+                )
+            )
+        elif native is not None:
+            rows.append(
+                (
+                    "Runtime",
+                    f"llama.cpp {native.build} for macOS, no Docker (downloaded once if "
+                    f"missing, about {native.size / 1000**2:.0f} MB)",
                 )
             )
         for line in key_values(rows):

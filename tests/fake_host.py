@@ -31,6 +31,12 @@ class FakeHost:
         self.live_codes: dict[tuple[str, ...], int] = {}
         self.processes: dict[int, str] = {}  # pid -> command line
         self.terminated: list[int] = []
+        self.killed: list[int] = []
+        self.ignore_terminate: set[int] = set()  # pids that do not end on SIGTERM
+        self.started: list = []  # (argv, log, cwd) per start_process
+        self.start_fails = False
+        self.start_log = ""  # what a started process writes to its log
+        self.next_pid = 4000
         self.streamed: list[tuple[str, ...]] = []
         self.stream_lines: dict[tuple[str, ...], list[str]] = {}  # command -> its output
 
@@ -85,7 +91,23 @@ class FakeHost:
 
     def terminate(self, pid: int) -> None:
         self.terminated.append(pid)
+        if pid not in self.ignore_terminate:
+            self.processes.pop(pid, None)
+
+    def kill(self, pid: int) -> None:
+        self.killed.append(pid)
         self.processes.pop(pid, None)
+
+    def start_process(self, argv, log, cwd=None):
+        self.started.append((tuple(argv), log, cwd))
+        if self.start_fails:
+            return None
+        pid = self.next_pid
+        self.next_pid += 1
+        self.processes[pid] = " ".join(argv)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(self.start_log)
+        return pid
 
     def stream(self, argv: Sequence[str]):
         self.streamed.append(tuple(argv))

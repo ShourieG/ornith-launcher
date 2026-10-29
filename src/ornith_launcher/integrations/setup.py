@@ -23,9 +23,10 @@ NONE, OPENCODE_ONLY, CLAUDE_ONLY, BOTH = "none", "opencode", "claude", "both"
 CHOICES = (
     (NONE, "None", "just the model server"),
     (OPENCODE_ONLY, "OpenCode", "the model's chat template is used as it is"),
-    (CLAUDE_ONLY, "Claude Code", "applies a small chat-template fix"),
-    (BOTH, "OpenCode + Claude Code", "suggested; applies a small chat-template fix"),
+    (CLAUDE_ONLY, "Claude Code", "suggested; applies a small chat-template fix"),
+    (BOTH, "OpenCode + Claude Code", "applies a small chat-template fix"),
 )
+SUGGESTED = 2  # Claude Code, the tool Ornith's makers suggest
 
 
 def choose(app: App, prompter: PlainPrompter) -> str:
@@ -41,12 +42,19 @@ def choose(app: App, prompter: PlainPrompter) -> str:
         "copy, the model file is not changed.",
         indent="  ",
     )
+    prompter.paragraph(
+        "OpenCode also gets picture instructions: a short file, added to OpenCode's "
+        "instructions, that goes into the system prompt of every OpenCode session, for every "
+        "model, and tells models how to show charts and diagrams in the chat. Uninstall removes "
+        "it with the last Ornith model.",
+        indent="  ",
+    )
     prompter.paragraph(f"Note: {claude_code.ANTHROPIC_NOTICE}", indent="  ")
     picked = prompter.choose(
         "Connect the model to a coding tool?",
         ["Option", ""],
         [Choice((label, note)) for _, label, note in CHOICES],
-        default=3,
+        default=SUGGESTED,
     )
     return CHOICES[int(picked)][0]
 
@@ -115,6 +123,9 @@ def _set_up_claude(app: App, profile: Profile, is_default: bool) -> None:
     app.say(f"  Created {wrapper}. Run it to use Claude Code with this model.")
     if not claude_code.on_path(wrapper.parent, app.env):
         app.say(f"    {wrapper.parent} is not on your PATH; run it by its full path, or add it.")
+        if app.os_name == "darwin":
+            # zsh is the default shell on macOS; Linux shells differ too much for one line.
+            app.say(f"    To add it: echo 'export PATH=\"{wrapper.parent}:$PATH\"' >> ~/.zprofile")
 
 
 def _drop_claude(app: App, profile: Profile) -> None:
@@ -143,14 +154,51 @@ def _set_up_opencode(app: App, prompter: PlainPrompter, profile: Profile) -> Non
             return
     provider_id = opencode.provider_id_for(config, profile)
     record = {"config": str(path), "provider": provider_id, "label": opencode.PROVIDER_NAME}
+    record.update(_offer_default(prompter, profile, config, provider_id, display))
     if path.exists():
         record["backup"] = str(opencode.backup(path, datetime.datetime.now()))
-    opencode.write(path, opencode.merged(config, profile, provider_id, display))
+    pictures = opencode.write_pictures(app.paths)
+    opencode.write(path, opencode.merged(config, profile, provider_id, display, pictures))
     profile.integrations["opencode"] = record
     app.say(
         f"  Added {profile.runtime.alias} to {path}. "
         f"In OpenCode: /models -> {opencode.PROVIDER_NAME}"
     )
+    _say_pictures(app, pictures)
+    if record.get("default_model"):
+        previous = record.get("previous_model")
+        app.say(
+            "  New OpenCode sessions start with it. Uninstalling puts the default back to "
+            f"{previous if previous else 'none'}."
+        )
+
+
+def _say_pictures(app: App, pictures: Path) -> None:
+    app.say(
+        f"  Added picture instructions to OpenCode's instructions: {pictures}\n"
+        "  OpenCode puts this file in the system prompt of every session, for every model, so\n"
+        "  models know how to show charts and diagrams in the chat. You can read it there."
+    )
+
+
+def _offer_default(
+    prompter: PlainPrompter, profile: Profile, config: dict, provider_id: str, display: str
+) -> dict:
+    """Ask to make the model OpenCode's default; returns what uninstall needs to undo it.
+
+    The answer changes ``config`` in place. A default that is already this model
+    (setup run again) keeps the default it replaced the first time.
+    """
+    ours = opencode.model_ref(provider_id, profile)
+    current = config.get("model")
+    if current == ours:
+        earlier = profile.integrations.get("opencode") or {}
+        return {"default_model": ours, "previous_model": earlier.get("previous_model")}
+    now = f"now {current}" if current else "none is set now"
+    if not prompter.confirm(f"Make {display} OpenCode's default model ({now})?", default=True):
+        return {}
+    config["model"] = ours
+    return {"default_model": ours, "previous_model": current}
 
 
 def _paste_instead(
@@ -160,6 +208,13 @@ def _paste_instead(
     app.say(f"{path} has comments, which this tool cannot keep when it rewrites the file.")
     app.say("Add this to it yourself:")
     app.say(opencode.snippet(profile, provider_id, display))
+    pictures = opencode.write_pictures(app.paths)
+    app.say(
+        "To make it the default model, also set "
+        f'"model": "{opencode.model_ref(provider_id, profile)}". To let models show pictures '
+        f'in the chat, add "{pictures}" to "instructions". OpenCode puts that file in the '
+        "system prompt of every session, for every model."
+    )
     if not prompter.confirm(
         "Or rewrite the file without its comments (a backup is kept)?", default=False
     ):
@@ -173,10 +228,12 @@ def _paste_instead(
         "config": str(path),
         "provider": provider_id,
         "label": opencode.PROVIDER_NAME,
+        **_offer_default(prompter, profile, config, provider_id, display),
         "backup": str(opencode.backup(path, datetime.datetime.now())),
     }
-    opencode.write(path, opencode.merged(config, profile, provider_id, display))
+    opencode.write(path, opencode.merged(config, profile, provider_id, display, pictures))
     profile.integrations["opencode"] = record
+    _say_pictures(app, pictures)
 
 
 def _strip_comments(text: str) -> str:

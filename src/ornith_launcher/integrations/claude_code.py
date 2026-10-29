@@ -113,6 +113,9 @@ done
 export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CTX"
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS="${{CLAUDE_CODE_MAX_OUTPUT_TOKENS:-32000}}"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+# llama.cpp cannot answer auto mode's server-side checks, so without this every session in
+# auto mode stops at Anthropic's "isn't eligible" notice before its first checked action.
+export CLAUDE_CODE_AUTO_MODE_SERVER="${{CLAUDE_CODE_AUTO_MODE_SERVER:-0}}"
 # A full prompt at this context can take longer to read than Claude Code's default timeout.
 export API_TIMEOUT_MS="${{API_TIMEOUT_MS:-{timeout}}}"
 exec claude "$@"

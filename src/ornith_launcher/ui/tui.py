@@ -352,6 +352,7 @@ class TuiPrompter(PlainPrompter):
             return self._menu_key(keys)
         selected = default
         top = 0
+        refused = ""  # said once after Enter on a greyed-out row, so it never looks stuck
         arrows = arrows_for(self.out)
         click = _shown_hint(choices, click_hint())
         pages = alternates(previous_page, next_page, arrows)
@@ -360,7 +361,8 @@ class TuiPrompter(PlainPrompter):
             with raw_keys():
                 while True:
                     size = shutil.get_terminal_size((100, 30))
-                    notes = len(notice_lines(notice, size.columns))
+                    shown = "\n".join(text for text in (notice, refused) if text)
+                    notes = len(notice_lines(shown, size.columns))
                     tallest = detail_height(choices, size.columns)
                     body = body_height(
                         size.lines, keys, click, pages, notes, tallest, _gaps(choices)
@@ -378,14 +380,17 @@ class TuiPrompter(PlainPrompter):
                         arrows,
                         click,
                         pages,
-                        notice,
+                        shown,
                     )
                     self.out.write(CLEAR + "\r\n".join(lines))
                     self.out.flush()
                     key = _next_key(size)
                     if not key:
                         continue  # the window was resized: draw it again at the new size
-                    if key in ("up", "k"):
+                    refused = ""
+                    if key == "enter" and not choices[selected].enabled:
+                        refused = "That option is not available here; its note says why."
+                    elif key in ("up", "k"):
                         selected = max(0, selected - 1)
                     elif key in ("down", "j"):
                         selected = min(len(choices) - 1, selected + 1)

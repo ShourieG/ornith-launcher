@@ -2,7 +2,7 @@
 
 Linux and macOS use the XDG folders (``~/.config/ornith-launcher`` and so on);
 Windows uses ``%APPDATA%`` and ``%LOCALAPPDATA%``. Downloaded models go to
-``~/.ornith-launcher/models`` on every OS unless the user picks another folder.
+``~/models/ornith-launcher`` on every OS unless the user picks another folder.
 """
 
 from __future__ import annotations
@@ -47,6 +47,11 @@ class Paths:
         return self.state / "logs"
 
 
+def default_models_dir(home: Path) -> Path:
+    # Visible in file managers, and outside the folder a git clone in home would make.
+    return home / "models" / APP
+
+
 def resolve_paths(env: Mapping[str, str], home: Path, os_name: str) -> Paths:
     """Folders for the given environment, home folder and OS ("linux", "darwin", "windows")."""
     if os_name == "windows":
@@ -57,7 +62,7 @@ def resolve_paths(env: Mapping[str, str], home: Path, os_name: str) -> Paths:
             data=local,
             cache=local / "cache",
             state=local,
-            default_models=home / f".{APP}" / "models",
+            default_models=default_models_dir(home),
         )
 
     def xdg(name: str, default: Path) -> Path:
@@ -70,7 +75,7 @@ def resolve_paths(env: Mapping[str, str], home: Path, os_name: str) -> Paths:
         data=xdg("XDG_DATA_HOME", home / ".local" / "share"),
         cache=xdg("XDG_CACHE_HOME", home / ".cache"),
         state=xdg("XDG_STATE_HOME", home / ".local" / "state"),
-        default_models=home / f".{APP}" / "models",
+        default_models=default_models_dir(home),
     )
 
 

@@ -82,6 +82,18 @@ def parse_meminfo(text: str) -> dict[str, int]:
     return values
 
 
+def read_meminfo(host: Host) -> dict[str, int]:
+    """``/proc/meminfo`` values in bytes; on macOS the same keys, from sysctl and vm_stat."""
+    text = host.read_text("/proc/meminfo")
+    if text is not None:
+        return parse_meminfo(text)
+    if host.which("vm_stat"):
+        from ornith_launcher.system import macos
+
+        return macos.meminfo_values(host)
+    return {}
+
+
 def parse_cgroup_limit(text: str | None) -> int | None:
     """Parse a cgroup ``memory.max`` (v2) or ``memory.limit_in_bytes`` (v1) value."""
     if text is None:

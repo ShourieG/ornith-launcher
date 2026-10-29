@@ -25,7 +25,7 @@ from typing import TextIO
 from ornith_launcher.profiles import Profile
 from ornith_launcher.runtime.backend import Backend
 from ornith_launcher.system.host import Host, LineStream
-from ornith_launcher.system.memory import parse_meminfo
+from ornith_launcher.system.memory import read_meminfo
 from ornith_launcher.system.thermal import read_thermal
 from ornith_launcher.ui.prompts import YES_HINT
 
@@ -58,7 +58,7 @@ def status_line(host: Host, backend: Backend, profile: Profile, now: str) -> tup
         if thermal.utilisation is not None:
             gpu += f"  load {thermal.utilisation:.0f}%"
         parts.append(gpu)
-    memory = parse_meminfo(host.read_text("/proc/meminfo") or "")
+    memory = read_meminfo(host)
     if "MemAvailable" in memory:
         parts.append(f"memory free {memory['MemAvailable'] / GIB:.0f} GiB")
     if "SwapTotal" in memory:

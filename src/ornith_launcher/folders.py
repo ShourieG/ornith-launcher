@@ -13,6 +13,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ornith_launcher.config import default_models_dir
+
 GIB = 1024**3
 SPARE = 2 * GIB
 
@@ -172,7 +174,7 @@ def hidden_notice(folder: Path, home: Path, os_name: str) -> str | None:
         if os_name == "darwin"
         else "in Files, press Ctrl+H to show hidden folders"
     )
-    visible = home / "ornith-models"
+    visible = default_models_dir(home)
     return (
         f"This folder is hidden, so it won't show in your file manager by default ({how}). "
         f"You are free to pick a visible folder instead, for example {visible}."

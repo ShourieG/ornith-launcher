@@ -61,6 +61,15 @@ class Host(Protocol):
     def terminate(self, pid: int) -> None:
         """Ask a process to end (SIGTERM); nothing happens if it is already gone."""
 
+    def kill(self, pid: int) -> None:
+        """End a process that did not stop when asked (SIGKILL)."""
+
+    def start_process(self, argv: Sequence[str], log: Path, cwd: Path | None = None) -> int | None:
+        """Start a process in its own session with its output in ``log``; its pid, or None.
+
+        Its own session means Ctrl+C in this terminal, or closing the window, does not reach it.
+        """
+
     def stream(self, argv: Sequence[str]) -> LineStream | None:
         """A running command's output, line by line; None if it is not installed."""
 
@@ -97,6 +106,7 @@ class LocalHost:
 
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
         self._env = dict(os.environ if env is None else env)
+        self._children: dict[int, subprocess.Popen] = {}  # started here, reaped when they end
 
     @property
     def env(self) -> Mapping[str, str]:
@@ -163,6 +173,10 @@ class LocalHost:
         return True
 
     def process_command(self, pid: int) -> str | None:
+        child = self._children.get(pid)
+        if child is not None and child.poll() is not None:
+            del self._children[pid]  # ended: poll() reaped it, so it is no zombie
+            return None
         try:
             raw = Path(f"/proc/{pid}/cmdline").read_bytes()
         except OSError:
@@ -179,6 +193,30 @@ class LocalHost:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
+
+    def kill(self, pid: int) -> None:
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+
+    def start_process(self, argv: Sequence[str], log: Path, cwd: Path | None = None) -> int | None:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(log, "wb") as handle:
+                process = subprocess.Popen(
+                    list(argv),
+                    env=self._env,
+                    cwd=str(cwd) if cwd else None,
+                    stdin=subprocess.DEVNULL,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except OSError:
+            return None
+        self._children[process.pid] = process
+        return process.pid
 
     def stream(self, argv: Sequence[str]) -> LineStream | None:
         # Same process group, so closing the window (SIGHUP) or Ctrl+C ends the command too.

@@ -1,4 +1,4 @@
-version: 1
+version: 2
 ornith-launcher (unofficial)
 
 This is an unofficial project. It is not affiliated with, endorsed by, or sponsored by
@@ -15,7 +15,7 @@ Ornith AI, Anthropic, Anomaly/OpenCode, Hugging Face, Docker, NVIDIA, AMD, Intel
 - Claude Code with local models is not supported by Anthropic.
 - Benchmarks were measured on one machine and are labelled TESTED, INFERRED or ESTIMATED.
 - Long-context runs keep the GPU hot for a long time. Use the tool at your own risk.
-- No telemetry. Connections go only to Hugging Face, ghcr.io and, if you choose them, the
-  official Claude Code and OpenCode installers.
+- No telemetry. Connections go only to Hugging Face, ghcr.io (Linux), GitHub (macOS) and, if
+  you choose them, the official Claude Code and OpenCode installers.
 
 The full text is in DISCLAIMER.md.

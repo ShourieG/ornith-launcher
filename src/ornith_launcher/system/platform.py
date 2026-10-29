@@ -36,6 +36,16 @@ def detect_platform(
     host: Host, system: str | None = None, machine: str | None = None
 ) -> PlatformInfo:
     env = host.env
+    os_name = (system or _platform.system()).lower()
+    if os_name == "darwin":
+        # The Mac's own desktop is always there, except over SSH, where no window can open.
+        remote = bool(env.get("SSH_CONNECTION") or env.get("SSH_TTY"))
+        return PlatformInfo(
+            os=os_name,
+            arch=normalise_arch(machine or _platform.machine()),
+            desktop=None if remote else "macOS",
+            session_type="ssh" if remote else "aqua",
+        )
     has_display = bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
     session = env.get("XDG_SESSION_TYPE") or None
     if session is None and has_display:
@@ -45,7 +55,7 @@ def detect_platform(
         # A colon-separated list such as "ubuntu:GNOME"; the last entry is the base desktop.
         desktop = (env.get("XDG_CURRENT_DESKTOP") or "unknown").split(":")[-1] or "unknown"
     return PlatformInfo(
-        os=(system or _platform.system()).lower(),
+        os=os_name,
         arch=normalise_arch(machine or _platform.machine()),
         desktop=desktop,
         session_type=session,

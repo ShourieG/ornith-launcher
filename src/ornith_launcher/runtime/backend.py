@@ -1,8 +1,8 @@
 """The interface every runtime backend implements.
 
-Phase 1 runs llama.cpp in Docker on Linux (``runtime.docker``). Windows and
-macOS will run the native release binaries as a child process instead, behind
-the same interface, so the launch, status and monitor code does not change.
+Linux runs llama.cpp in Docker (``runtime.docker``). macOS runs the native
+release build as a child process instead (``runtime.native``; Windows later),
+behind the same interface, so the launch, status and monitor code does not change.
 """
 
 from __future__ import annotations

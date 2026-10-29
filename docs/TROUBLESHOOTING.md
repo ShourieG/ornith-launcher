@@ -9,7 +9,7 @@ it finds. The sections below cover what it cannot fix for you.
   3.8, RHEL 8 has 3.6). Install a newer one alongside it, for example `sudo apt install python3.9` or `sudo dnf
   install python39`; `./ornith-launcher` finds `python3.9` to `python3.14` by name.
 
-## Docker
+## Docker (Linux)
 
 | Message | Fix |
 |---|---|
@@ -30,14 +30,15 @@ The launcher never runs `sudo` itself; it prints the command for you.
 - "Another Ornith server is running": two large models rarely fit in memory together. Stop the other one with
   `./ornith-launcher stop`.
 - "The server stopped while loading": the last log lines are printed; the full log is `docker logs
-  ornith-launcher-NAME`. Running out of memory is the usual cause. Pick a smaller context or quant with
-  `./ornith-launcher setup`.
+  ornith-launcher-NAME` on Linux, or `~/.local/state/ornith-launcher/logs/NAME.log` on macOS. Running out of
+  memory is the usual cause. Pick a smaller context or quant with `./ornith-launcher setup`.
 - "The model server (llama.cpp image) is not on this machine": `launch` offers to download it. If you say no,
   run `./ornith-launcher setup --repair NAME` later.
 - The desktop icon asks "Allow Launching" (GNOME without `gio`, or other desktops): right-click it and choose that
   once.
 - The server's own log shows in the server window, between the status lines (they start with `--`). Closed that
-  window? `./ornith-launcher logs NAME` shows the same log in any terminal; Docker keeps it, so nothing is lost.
+  window? `./ornith-launcher logs NAME` shows the same log in any terminal; Docker (or the log file on macOS)
+  keeps it, so nothing is lost.
 - Closed the chat log window by mistake: press `c` and Enter in the server window, or run
   `./ornith-launcher chat-log NAME` in any terminal. The new window shows the last 10 requests again. Ctrl+C in
   the chat log window never stops the server.
@@ -52,6 +53,24 @@ The launcher never runs `sudo` itself; it prints the command for you.
   `/v1/messages`). Other requests pass through without showing.
 - SELinux hosts (Fedora, RHEL) block bind mounts; the launcher runs its container with `label=disable` and never
   relabels your files.
+
+## macOS
+
+- "macOS ... is older than 13.3, which the pinned llama.cpp build needs": update macOS in System Settings >
+  General > Software Update. Setup cannot continue on an older version.
+- "This is an Intel Mac": the model runs on the CPU only, which is much slower. Pick a small model, such as a 9B
+  at Q4_K_M with a short context.
+- The server does not start and `./ornith-launcher doctor` says macOS marked the files as downloaded from the
+  internet: run the `xattr -dr` command doctor prints. The files' sha256 was checked when they were downloaded.
+- Finder asks before opening `Ornith NAME.command` the first time: choose Open. It does not ask again.
+- `ornith-claude` is not found after setup: `~/.local/bin` is not on your PATH. Setup prints the line to add to
+  `~/.zprofile`; open a new Terminal window after adding it.
+- A model in `~/Downloads` is not found: the quick search skips that folder on macOS, because macOS asks before an
+  app reads it. Give its path with `p` in setup, or `./ornith-launcher setup --model PATH`.
+- Setup plans against the GPU memory limit Metal sets, not the whole memory, so a model can be "too big" on a Mac
+  that has enough memory in total. The launcher never changes that limit.
+- The server window shows no GPU temperature: macOS reports it only to root, so `bench` cannot pause for heat
+  either.
 
 ## Model lists
 
@@ -82,6 +101,12 @@ The launcher never runs `sudo` itself; it prints the command for you.
 - Long prompts time out: the wrapper raises `API_TIMEOUT_MS` for long contexts. Set it higher yourself if needed,
   for example `API_TIMEOUT_MS=7200000 ornith-claude`.
 - `~/.local/bin` is not on your PATH: run the wrapper by its full path, or add the folder to PATH.
+- In auto mode, a session stops at "We're changing auto mode to no longer charge for classifier requests in
+  Claude Code. However, this session isn't eligible...": the wrapper was made before the launcher set
+  `CLAUDE_CODE_AUTO_MODE_SERVER=0`. Run `./ornith-launcher setup --integrations NAME` and keep Claude Code to
+  rewrite it. Every request goes to your local server, so nothing is billed by Anthropic either way.
+- Actions in auto mode wait a long time before they run: each check is a separate request to the local model
+  with a long prompt. Switch to Manual mode with Shift+Tab to approve actions yourself.
 
 ## OpenCode
 

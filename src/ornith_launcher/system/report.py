@@ -2,6 +2,9 @@
 
 Each problem carries the exact fix. The launcher never runs ``sudo`` itself, so
 fixes that need it are printed for the user to run.
+
+Linux runs llama.cpp in Docker; macOS runs the native release build (no Docker), so
+its check is the OS version, memory and the Metal GPU instead.
 """
 
 from __future__ import annotations
@@ -9,8 +12,9 @@ from __future__ import annotations
 import enum
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-from ornith_launcher.pins import Pins
+from ornith_launcher.pins import NativeBuild, Pins
 from ornith_launcher.system.docker import (
     INSTALL_URL,
     NVIDIA_TOOLKIT_URL,
@@ -47,6 +51,7 @@ class SystemReport:
     flavour: Flavour | None
     problems: tuple[Problem, ...]
     python: str
+    native: NativeBuild | None = None  # the release build to run without Docker (macOS)
 
     @property
     def blocking(self) -> tuple[Problem, ...]:
@@ -58,9 +63,17 @@ class SystemReport:
 
 
 def check_system(
-    host: Host, pins: Pins, *, system: str | None = None, machine: str | None = None
+    host: Host,
+    pins: Pins,
+    *,
+    system: str | None = None,
+    machine: str | None = None,
+    runtime_root: Path | None = None,
 ) -> SystemReport:
+    """``runtime_root``: where native runtimes are unpacked, to ask Metal for its limit."""
     platform = detect_platform(host, system, machine)
+    if platform.os == "darwin":
+        return _check_macos(host, pins, platform, runtime_root)
     docker = detect_docker(host)
     memory = detect_memory(host, docker_limit=docker.mem_total)
     gpus = tuple(detect_gpus(host))
@@ -94,8 +107,8 @@ def find_problems(
 
     if platform.os != "linux":
         block(
-            f"{platform.os} is not supported yet; this version runs on Linux only.",
-            "Use a Linux machine. Windows and macOS support is planned.",
+            f"{platform.os} is not supported yet; this version runs on Linux and macOS only.",
+            "Use a Linux machine or a Mac. Windows support is planned.",
         )
     if memory is None:
         block("Could not read /proc/meminfo.", "Run ornith-launcher on Linux with /proc mounted.")
@@ -156,4 +169,80 @@ def find_problems(
             "probably because it runs in a VM (Docker Desktop).",
             "Raise the memory limit in Docker Desktop's settings, or use Docker Engine.",
         )
+    return tuple(problems)
+
+
+def _check_macos(
+    host: Host, pins: Pins, platform: PlatformInfo, runtime_root: Path | None
+) -> SystemReport:
+    from ornith_launcher.system import macos
+
+    # The release names Intel builds x64; detection says amd64.
+    native = pins.native.get(f"macos-{'x64' if platform.arch == 'amd64' else platform.arch}")
+    server = None
+    if native is not None and runtime_root is not None:
+        server = runtime_root / native.reference / "llama-server"
+    devices = macos.list_devices(host, server)
+    memory = macos.detect_memory(host)
+    gpus = tuple(macos.detect_gpus(host, platform.arch, devices))
+    pools = macos.build_pools(memory, gpus, devices) if memory is not None else ()
+    problems = find_macos_problems(platform, memory, gpus, native, macos.macos_version(host))
+    python = ".".join(str(part) for part in sys.version_info[:3])
+    docker = DockerStatus(installed=False)  # not used on macOS
+    return SystemReport(platform, memory, gpus, pools, docker, None, problems, python, native)
+
+
+def find_macos_problems(
+    platform: PlatformInfo,
+    memory: MemoryInfo | None,
+    gpus: tuple[Gpu, ...],
+    native: NativeBuild | None,
+    version: tuple[int, ...] | None,
+) -> tuple[Problem, ...]:
+    from ornith_launcher.system.macos import MIN_VERSION
+
+    problems: list[Problem] = []
+    minimum = ".".join(str(part) for part in MIN_VERSION)
+    if version is not None and version < MIN_VERSION:
+        problems.append(
+            Problem(
+                Severity.BLOCKING,
+                f"macOS {'.'.join(str(p) for p in version)} is older than {minimum}, which the "
+                "pinned llama.cpp build needs.",
+                "Update macOS in System Settings > General > Software Update.",
+            )
+        )
+    if memory is None:
+        problems.append(
+            Problem(
+                Severity.BLOCKING,
+                "Could not read the memory size (sysctl hw.memsize).",
+                "Run ornith-launcher from a terminal in your own macOS session.",
+            )
+        )
+    if native is None:
+        problems.append(
+            Problem(
+                Severity.BLOCKING,
+                f"No pinned llama.cpp build runs on a Mac with a {platform.arch} CPU.",
+                "Use an Apple Silicon or Intel Mac.",
+            )
+        )
+    if not gpus:
+        problems.append(
+            Problem(
+                Severity.WARNING,
+                "This is an Intel Mac: the model runs on the CPU only, which is much slower, "
+                "and only small models are practical.",
+                "Continue to use the CPU, or use an Apple Silicon Mac.",
+            )
+        )
+    problems.append(
+        Problem(
+            Severity.WARNING,
+            "macOS support is new and has not been tested on a Mac by the project yet.",
+            "Continue; please report problems at "
+            "https://github.com/ShourieG/ornith-launcher/issues",
+        )
+    )
     return tuple(problems)

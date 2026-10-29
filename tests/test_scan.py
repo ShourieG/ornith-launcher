@@ -118,7 +118,7 @@ class PathsTest(unittest.TestCase):
         paths = resolve_paths({}, home, "linux")
         self.assertEqual(paths.config, home / ".config" / "ornith-launcher")
         self.assertEqual(paths.cache, home / ".cache" / "ornith-launcher")
-        self.assertEqual(paths.default_models, home / ".ornith-launcher" / "models")
+        self.assertEqual(paths.default_models, home / "models" / "ornith-launcher")
         custom = resolve_paths({"XDG_CONFIG_HOME": "/x", "XDG_CACHE_HOME": "rel"}, home, "darwin")
         self.assertEqual(custom.config, Path("/x/ornith-launcher"))
         self.assertEqual(custom.cache, home / ".cache" / "ornith-launcher")  # relative is ignored
@@ -132,7 +132,7 @@ class PathsTest(unittest.TestCase):
         )
         self.assertEqual(paths.config, Path("C:/Users/u/AppData/Roaming/ornith-launcher"))
         self.assertEqual(paths.cache, Path("C:/Users/u/AppData/Local/ornith-launcher/cache"))
-        self.assertEqual(paths.default_models, home / ".ornith-launcher" / "models")
+        self.assertEqual(paths.default_models, home / "models" / "ornith-launcher")
 
 
 if __name__ == "__main__":

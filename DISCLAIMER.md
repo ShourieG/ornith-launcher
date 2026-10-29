@@ -1,6 +1,6 @@
 # Disclaimer
 
-Version 1 (2026-10-18). ornith-launcher shows this text on first run and asks again whenever the version changes.
+Version 2 (2026-10-29). ornith-launcher shows this text on first run and asks again whenever the version changes.
 
 ornith-launcher is an unofficial project. It is not affiliated with, endorsed by, or sponsored by Ornith AI,
 Anthropic, Anomaly/OpenCode, Hugging Face, Docker, NVIDIA, AMD, Intel or ggml.org.
@@ -49,7 +49,7 @@ held the GPU at about 80 °C for more than 30 minutes (TESTED). Use the tool at 
 
 ## Docker Desktop
 
-This applies only if you run Docker Desktop on Linux instead of Docker Engine; Windows and macOS do not use Docker.
+This applies only if you run Docker Desktop on Linux instead of Docker Engine; macOS does not use Docker.
 Docker Desktop is free for personal use, education, non-commercial open source projects and small businesses
 (fewer than 250 employees and less than $10 million in annual revenue). Larger organisations need a paid Docker
 subscription. Docker Engine on Linux is not affected.
@@ -57,6 +57,6 @@ subscription. Docker Engine on Linux is not affected.
 ## Network and privacy
 
 ornith-launcher has no telemetry. It connects only to Hugging Face (models), ghcr.io (llama.cpp Docker images on
-Linux), GitHub (llama.cpp release binaries on Windows and macOS) and, if you choose them, the official Claude Code
+Linux), GitHub (the llama.cpp release build on macOS) and, if you choose them, the official Claude Code
 and OpenCode installers. The optional chat log shows your requests and the model's replies on your own screen; it
 keeps the last few in memory while the server runs and never saves or sends them.

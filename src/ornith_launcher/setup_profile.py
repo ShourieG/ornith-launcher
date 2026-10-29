@@ -11,19 +11,22 @@ from pathlib import Path
 
 from ornith_launcher import __version__, chat_log
 from ornith_launcher.app import App, self_command
-from ornith_launcher.installed import record
-from ornith_launcher.integrations import opencode
+from ornith_launcher.installed import downloaded_here, record
+from ornith_launcher.integrations import opencode, tool_windows
 from ornith_launcher.integrations import setup as integrations
 from ornith_launcher.integrations.shortcuts import (
+    command_file,
+    command_file_name,
     desktop_dir,
     desktop_entry,
+    mac_applications_dir,
     shortcut_name,
     shortcut_path,
     user_dirs_file,
     write_shortcut,
 )
 from ornith_launcher.integrations.terminals import THIS_TERMINAL, detect_terminals
-from ornith_launcher.launch import Launcher, _hop_to_terminal, make_runtime
+from ornith_launcher.launch import Launcher, Runtime, _hop_to_terminal, make_runtime
 from ornith_launcher.planner.memory_model import GIB
 from ornith_launcher.planner.rank import HEADROOM, Placement
 from ornith_launcher.profiles import (
@@ -37,7 +40,6 @@ from ornith_launcher.profiles import (
     suggest_name,
     valid_name,
 )
-from ornith_launcher.runtime.docker import DockerRuntime
 from ornith_launcher.scan import Plan
 from ornith_launcher.settings import Settings, save_settings
 from ornith_launcher.system.memory import PoolKind
@@ -62,8 +64,15 @@ def build_profile(
     cls = entry.classification
     candidate = selection.candidate
     report = plan.report
-    if report.flavour is None:
+    if report.flavour is None and report.native is None:
         raise SetupError("no llama.cpp image fits this machine", hint="Run: ornith-launcher doctor")
+    if report.native is not None:
+        # macOS: the native build, Metal on Apple Silicon and the CPU on an Intel Mac.
+        image, flavour, device_args = report.native.reference, "metal" if report.gpus else "cpu", []
+    else:
+        image = report.flavour.image.reference
+        flavour = report.flavour.image.flavour
+        device_args = list(report.flavour.device_args)
     parts = [str(Path(p).resolve()) for p in selection.model_paths]
     first = Path(parts[0])
     template = read_template(first)
@@ -74,7 +83,13 @@ def build_profile(
         parts=parts,
         size=sum(Path(p).stat().st_size for p in parts),
         mtime_ns=first.stat().st_mtime_ns,
-        location="external" if selection.local is not None else "managed",
+        # A file found on disk is still ours when this launcher downloaded it (a finished or
+        # resumed download picked from the first menu), so uninstall may offer to delete it.
+        location=(
+            "managed"
+            if selection.local is None or downloaded_here(app.paths, parts)
+            else "external"
+        ),
         repo=None if entry.repo.id.startswith("local/") else entry.repo.id,
         sha=entry.repo.sha or None,
         file=entry.file.path,
@@ -89,9 +104,9 @@ def build_profile(
         licence=entry.repo.licence,
     )
     runtime = RuntimeInfo(
-        image=report.flavour.image.reference,
-        flavour=report.flavour.image.flavour,
-        device_args=list(report.flavour.device_args),
+        image=image,
+        flavour=flavour,
+        device_args=device_args,
         context=candidate.context,
         native_context=candidate.native,
         slots=candidate.slots,
@@ -101,8 +116,9 @@ def build_profile(
         yarn_factor=candidate.yarn_factor,
         cache_ram_mib=DEFAULT_CACHE_RAM_MIB,
         placement=candidate.placement.value,
-        # Direct I/O avoids a second page-cache copy of the weights on unified memory.
-        direct_io=unified and candidate.placement is Placement.SINGLE,
+        # Direct I/O avoids a second page-cache copy of the weights on unified memory. It is
+        # Linux only: the pinned build's direct I/O is untested on macOS, which maps the file.
+        direct_io=unified and candidate.placement is Placement.SINGLE and report.native is None,
         sampling=dict(family.sampling) if family else {},
         selinux=report.docker.selinux,
         template=TemplateInfo(
@@ -129,16 +145,17 @@ def _source(selection: Selection) -> str:
     return selection.entry.classification.source.value
 
 
-def ensure_image(app: App, runtime: DockerRuntime, reference: str) -> None:
+def ensure_image(app: App, runtime: Runtime, reference: str) -> None:
     if runtime.image_present(reference):
         return
     app.say()
-    app.say(f"Downloading the llama.cpp image {reference.split('@')[0]}...")
+    app.say(f"Downloading the {runtime.describe(reference)}...")
     runtime.pull(reference)
-    record(app.paths, "images", reference)  # only an image this launcher pulled is ever removed
+    # Only an image (or runtime) this launcher fetched is ever removed.
+    record(app.paths, runtime.record_kind, reference)
 
 
-def fit_check(app: App, runtime: DockerRuntime, profile: Profile, plan: Plan) -> None:
+def fit_check(app: App, runtime: Runtime, profile: Profile, plan: Plan) -> None:
     """Ask llama.cpp itself how much memory the model needs, and compare with the budget."""
     app.say()
     app.say("Checking the plan with llama.cpp's own memory estimate...")
@@ -160,7 +177,7 @@ def fit_check(app: App, runtime: DockerRuntime, profile: Profile, plan: Plan) ->
 def choose_terminal(app: App, prompter: PlainPrompter, plan: Plan) -> dict[str, object]:
     if plan.report.platform.headless:
         return {"id": THIS_TERMINAL}
-    terminals = detect_terminals(app.host)
+    terminals = detect_terminals(app.host, app.os_name)
     options = []
     if terminals.default is not None:
         options.append(terminals.default)
@@ -201,40 +218,61 @@ def offer_shortcut(app: App, prompter: PlainPrompter, plan: Plan, profile: Profi
 
 
 def ask_shortcuts(app: App, prompter: PlainPrompter, profile: Profile) -> None:
-    """The two questions, skipping whatever the profile already has."""
-    comment = f"Start Ornith ({profile.name}) with ornith-launcher (unofficial)"
-    in_terminal = profile.terminal.get("id") == THIS_TERMINAL
-    entry = desktop_entry(
-        profile.name, self_command(), comment, in_terminal, chat_action=chat_log.enabled(profile)
-    )
+    """The two questions, skipping whatever the profile already has.
+
+    Linux gets ``.desktop`` entries; macOS gets ``.command`` files, which Finder opens
+    in Terminal, on the desktop and in ``~/Applications``.
+    """
+    mac = app.os_name == "darwin"
+    if mac:
+        entry = command_file(profile.name, self_command())
+        name = command_file_name(profile.name)
+        menu = "your Applications folder (~/Applications)"
+    else:
+        comment = f"Start Ornith ({profile.name}) with ornith-launcher (unofficial)"
+        in_terminal = profile.terminal.get("id") == THIS_TERMINAL
+        entry = desktop_entry(
+            profile.name,
+            self_command(),
+            comment,
+            in_terminal,
+            chat_action=chat_log.enabled(profile),
+        )
+        name = shortcut_name(profile.name)
+        menu = "your applications menu"
     desktop = desktop_dir(app.host.read_text(str(user_dirs_file(app.env, app.home))), app.home)
     # A profile set up earlier may have one already; only the missing one is asked about.
     on_desktop = _has_file(profile, "desktop_copy")
     if not on_desktop and desktop is not None and desktop.is_dir():
         if prompter.confirm("Put a launch icon for this model on your desktop?", default=True):
-            path = desktop / shortcut_name(profile.name)
+            path = desktop / name
             write_shortcut(path, entry)
             record(app.paths, "shortcuts", str(path))
             profile.integrations["desktop_copy"] = str(path)
             on_desktop = True
             app.say(f"  Created {path}.")
-            if not _trust_launcher(app, path):
+            if mac:
+                app.say("  If macOS asks before opening it the first time, choose Open.")
+            elif not _trust_launcher(app, path):
                 app.say(
                     '  If the icon says "Allow Launching", right-click it and choose that once.'
                 )
     if _has_file(profile, "shortcut"):
         return
     question = (
-        "Also add it to your applications menu?"
-        if on_desktop
-        else "Add a launcher for this model to your applications menu?"
+        f"Also add it to {menu}?" if on_desktop else f"Add a launcher for this model to {menu}?"
     )
     if prompter.confirm(question, default=False):
-        path = shortcut_path(profile.name, app.env, app.home)
+        if mac:
+            path = mac_applications_dir(app.home) / name
+            note = "Find it there in Finder, or with Spotlight."
+        else:
+            path = shortcut_path(profile.name, app.env, app.home)
+            note = "It appears in your applications menu."
         write_shortcut(path, entry)
         record(app.paths, "shortcuts", str(path))
         profile.integrations["shortcut"] = str(path)
-        app.say(f"  Created {path}. It appears in your applications menu.")
+        app.say(f"  Created {path}. {note}")
 
 
 def _has_file(profile: Profile, key: str) -> bool:
@@ -282,6 +320,7 @@ def finish_setup(
         profile.terminal = choose_terminal(app, prompter, plan)
         offer_chat_log(app, prompter, plan, profile)
         offer_shortcut(app, prompter, plan, profile)
+        tool_windows.offer(app, prompter, profile, plan.report.platform.headless)
     except (Cancelled, KeyboardInterrupt):
         # No profile is saved, so nothing would ever clean these up later.
         record = profile.integrations.pop("opencode", None)
@@ -365,11 +404,14 @@ def change_integrations(app: App, prompter: PlainPrompter, name: str) -> int:
     """``setup --integrations NAME``: connect a profile to other tools, or disconnect it."""
     from ornith_launcher.profiles import load_profile
     from ornith_launcher.settings import load_settings
+    from ornith_launcher.system.platform import detect_platform
 
     profile = load_profile(app.paths, name)
     before = profile.runtime.template.source
     is_default = load_settings(app.paths).default_profile == name
     integrations.configure(app, prompter, profile, integrations.choose(app, prompter), is_default)
+    headless = detect_platform(app.host, app.os_name).headless
+    tool_windows.offer(app, prompter, profile, headless)
     save_profile(app.paths, profile)
     if profile.runtime.template.source != before and make_runtime(app).status(profile).alive:
         app.say("The chat template changed; restart the server for it to take effect:")
@@ -383,7 +425,7 @@ def add_shortcuts(app: App, prompter: PlainPrompter, name: str) -> int:
     from ornith_launcher.system.platform import detect_platform
 
     profile = load_profile(app.paths, name)
-    if detect_platform(app.host).headless:
+    if detect_platform(app.host, app.os_name).headless:
         raise SetupError(
             "there is no desktop session here, so there is nowhere to put a launch icon",
             hint=f"Run this from a desktop terminal, or start the model with: "

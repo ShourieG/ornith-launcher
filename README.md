@@ -1,10 +1,33 @@
 # ornith-launcher
 
-Set up an Ornith model on your own machine with one command. Setup works out what fits and recommends a choice at
-each step; you decide what to keep and what it adds to your machine.
+An unofficial command-line tool that sets up Ornith models on your own computer and runs them with llama.cpp. Its
+aim is that trying a local LLM takes one command and a few presses of Enter, while you still see and control
+every choice made for you.
 
-- Easy setup: it checks your memory, GPU and Docker, suggests the builds that fit, and fills in the llama.cpp
-  settings. Enter takes the recommended choice, and you can change any step.
+Running a model locally usually means putting several parts together yourself: a model file that fits your
+memory, the right llama.cpp build and flags, a context size, a way to start and stop the server, and the settings
+each coding tool needs. ornith-launcher works these out from your machine and says why it recommends each choice,
+and you can change any of them. Before it installs or changes anything, it asks. It keeps a record of what it
+added, so uninstall removes exactly that, and it labels each memory and benchmark figure as tested, inferred or
+estimated.
+
+It is a good first step if you are new to LLMs. Setup recommends a choice at each step and says why, and
+[New to local models?](#new-to-local-models) explains the words you will see. You still need the
+[requirements](#requirements) in place, such as Docker on Linux, and time for the download.
+
+It also helps if you already run models yourself. It takes over the repetitive part of each setup: checking what
+fits, writing the llama.cpp command and connecting Claude Code or OpenCode. That makes it quicker to set up a model
+and to compare different models, quants and contexts, since each one is saved as its own profile that you can
+launch or remove on its own.
+
+What it does for you:
+
+- No LLM needed to set it up: setup is a plain Python script with fixed rules. It reads each model's file header,
+  does the memory arithmetic and writes the llama.cpp command itself, so no chatbot or coding agent has to write a
+  config or guess a flag. You need no API key or account, and the only model involved is the one you choose to run.
+- Easy setup: it checks your memory and GPU (and Docker on Linux), suggests the builds that fit, and fills in the
+  llama.cpp settings. Enter takes the recommended choice, and you can change any step. Nothing is installed with
+  pip; the tool needs only Python.
 - Extended contexts: you pick a context from 32k up to 1M tokens, with the memory each one needs shown first. Past
   the native 262k, the launcher sets up YaRN for you.
 - One-click launch, if you want it: setup offers a desktop icon (default yes) and an applications menu entry
@@ -14,14 +37,16 @@ each step; you decide what to keep and what it adds to your machine.
   tools you pick, setup offers the official installer when one is missing, gives Claude Code an `ornith-claude`
   command and adds the model to OpenCode's model list.
 
-ornith-launcher is an unofficial command-line tool. It is not affiliated with Ornith AI or any other company
-named here; see [NOTICE](NOTICE) and [DISCLAIMER.md](DISCLAIMER.md).
+ornith-launcher is not affiliated with Ornith AI or any other company named here; see [NOTICE](NOTICE) and
+[DISCLAIMER.md](DISCLAIMER.md).
 
-> Early development. Linux with Docker only for now, tested on one machine (a DGX Spark); Windows and macOS are
-> planned. See [What has been tested](#what-has-been-tested).
+> Pre-release. Linux and macOS are supported, and Windows support is planned for a later release. Linux with
+> Docker has been tested on one machine (an NVIDIA DGX Spark). macOS runs without Docker and has not run on a Mac
+> yet. See [What has been tested](#what-has-been-tested), [Linux](#linux) and [macOS](#macos).
 
 ## Contents
 
+- [New to local models?](#new-to-local-models)
 - [How it works](#how-it-works)
 - [How it simplifies setup](#how-it-simplifies-setup)
 - [One-click launcher](#one-click-launcher)
@@ -36,14 +61,33 @@ named here; see [NOTICE](NOTICE) and [DISCLAIMER.md](DISCLAIMER.md).
 - [What has been tested](#what-has-been-tested)
 - [Commands](#commands)
 - [Files and settings](#files-and-settings)
+- [Linux](#linux)
+- [macOS](#macos)
 - [More](#more)
+
+## New to local models?
+
+You can run setup without knowing any of this; every choice has a recommended default. These are the words you
+will see along the way:
+
+| Word | What it means |
+|---|---|
+| llama.cpp | The open-source program that loads the model and answers requests. The launcher fetches a pinned build of it and starts it for you |
+| GGUF | The model file format llama.cpp reads. Its header says how big the model is, which the launcher uses to work out memory |
+| Quant | How finely the model's numbers are stored, such as Q8_0 (8 bits) or Q4_K_M (4 to 5 bits). Fewer bits make a smaller file that needs less memory, at some cost in quality |
+| Context | How many tokens (pieces of words) the model can read at once. A longer context needs more memory |
+| KV cache | The memory that holds the context while the model works. It grows with the context |
+| Prefill | The time the model spends reading your prompt before it starts answering. It grows with the prompt |
+| YaRN | A way to stretch a model past its native context. The launcher sets it up for contexts above 262k |
+| Vision file | An extra file (`mmproj`) that lets a model read images. Setup can leave it out to save memory |
+| Fits, stretch, too big | Whether a choice fits and leaves the launcher's 15% memory reserve alone, fits only by using part of that reserve, or does not fit |
 
 ## How it works
 
 You answer setup's questions once per model:
 
-1. Run `./ornith-launcher`. It checks your memory, GPU and Docker, then looks for Ornith models already on
-   your disk.
+1. Run `./ornith-launcher`. It checks your memory and GPU (and Docker on Linux), then looks for Ornith models
+   already on your disk.
 2. Pick a model. It suggests a few that fit this machine, each with the reason it was picked. Press Enter on
    the first suggestion and Enter again at each later step to take the recommended choice. Before anything is
    downloaded, a summary shows the model, its settings, the memory it needs and the download size and time.
@@ -122,16 +166,17 @@ the first menu next time, and `r` resumes it with the settings you already chose
 
 ### Starting llama.cpp with the right settings
 
-The server runs in Docker from a llama.cpp image pinned by digest. The launcher builds the server command from your
-settings and runs llama.cpp's own memory check before the first launch. You never type a llama.cpp flag, and
+On Linux the server runs in Docker from a llama.cpp image pinned by digest. On macOS it runs the llama.cpp release
+build for the Mac, pinned by sha256, without Docker. The launcher builds the server command from your settings and
+runs llama.cpp's own memory check before the first launch. You never type a llama.cpp flag, and
 `./ornith-launcher status --command` shows the full command if you want to see it.
 
 ### Connecting your coding tools
 
-Near the end, setup asks "Connect the model to a coding tool?" and offers None, OpenCode, Claude Code, or both. Both
-is the default, so pick None if you want neither. For a tool you pick that is not installed, setup asks "Install
-Claude Code now?" (or OpenCode) and runs the tool's official installer only after a yes; say no and that tool is
-skipped.
+Near the end, setup asks "Connect the model to a coding tool?" and offers None, OpenCode, Claude Code, or both.
+Claude Code is the suggested default, since Ornith's makers recommend it; pick None if you want neither. For a
+tool you pick that is not installed, setup asks "Install Claude Code now?" (or OpenCode) and runs the tool's
+official installer only after a yes; say no and that tool is skipped.
 
 If you connect Claude Code, setup:
 
@@ -141,11 +186,21 @@ If you connect Claude Code, setup:
   work. The model file is not changed.
 
 If you connect OpenCode, setup adds the model to your OpenCode config after backing the file up. In OpenCode it
-appears under `/models` as "Ornith (local, ornith-launcher)". If the config has comments, which a rewrite would
-lose, setup shows the entry for you to paste instead and asks before rewriting the file.
+appears under `/models` as "Ornith (local, ornith-launcher)". With vision on, the entry also tells OpenCode that
+the model reads images; without that, OpenCode refuses to send it any. Setup also asks whether to make the model
+OpenCode's default (default yes), so new sessions start with it, in OpenCode's desktop app too; uninstall puts the
+old default back. If the config has comments, which a rewrite would lose, setup shows the entry for you to paste
+instead and asks before rewriting the file.
 
-`./ornith-launcher setup --integrations NAME` connects a profile you set up earlier. See
-[Using the model from other tools](#using-the-model-from-other-tools).
+Last, setup asks whether each launch should also open the tools you connected, each in its own window and
+already pointed at the model: "Open Claude Code when this model starts?", or with both connected a choice of
+Neither, Claude Code, OpenCode or Both. The default is no. If you say yes, it asks which folder they open in (your
+home folder by default). The tools open once the server answers, in the same terminal app as the server window,
+and stay open when the server stops, since they may hold your work. Only tools that are installed and connected
+are offered, so a tool you declined to install is never opened.
+
+`./ornith-launcher setup --integrations NAME` connects a profile you set up earlier and asks the last question
+again. See [Using the model from other tools](#using-the-model-from-other-tools).
 
 ### Cleaning up
 
@@ -160,46 +215,43 @@ them at the end:
 | Question | Default | What it creates |
 |---|---|---|
 | Put a launch icon for this model on your desktop? | Yes | An icon in your desktop folder |
-| Also add it to your applications menu? | No | An entry in `~/.local/share/applications` |
+| Also add it to your applications menu? | No | An entry in your applications menu (on macOS, `~/Applications`) |
 
 Setup only asks the first question when your desktop folder exists. When you skip the icon, the second question
-becomes "Add a launcher for this model to your applications menu?". Each one is named "Ornith: NAME" after the
-profile, so every model you set up gets its own. If you say no to both, nothing is added to your desktop or menu,
-and you start the model with `./ornith-launcher launch NAME` or with `l` on setup's first menu. To add them later,
-run `./ornith-launcher setup --shortcuts NAME`. It asks the same questions and skips any icon or entry the profile
-already has.
+becomes "Add a launcher for this model to your applications menu?". Each one is named after the profile, so every
+model you set up gets its own. If you say no to both, nothing is added to your desktop or menu, and you start the
+model with `./ornith-launcher launch NAME` or with `l` on setup's first menu. To add them later, run
+`./ornith-launcher setup --shortcuts NAME`. It asks the same questions and skips any icon or entry the profile
+already has. What the files are on each OS is in [Linux](#linux) and [macOS](#macos).
 
 Double-clicking the icon, or clicking the menu entry:
 
-1. Opens the terminal you picked during setup: the system default, or one such as GNOME Terminal, Konsole, kitty,
-   Alacritty or xterm.
-2. Starts the model server with the profile's settings, fetching the llama.cpp image first if it is missing.
+1. Opens the terminal you picked during setup: the system default, or another one that is installed.
+2. Starts the model server with the profile's settings, fetching the llama.cpp server first if it is missing.
 3. Shows the server's own log as it comes, with a status line every 15 seconds.
+4. Once the server answers, opens Claude Code or OpenCode in their own windows, if you asked for that in setup.
 
 To stop the model, press Ctrl+C in that window. It asks "Stop the server and free its memory?" and defaults to
 yes. Closing the window leaves the server running, and `./ornith-launcher stop` stops it later. If another model is
 already running, the launcher asks whether to stop it first (default yes), because two large models rarely fit in
 memory together.
 
-On GNOME the launcher marks its own desktop icon as trusted, so it starts on the first double-click. Other
-desktops may ask you to allow launching once. If you turned on the chat log, right-clicking the icon or menu entry
-also offers "Show chat log", on desktops that show actions.
-
 Both run `ornith-launcher launch NAME`, so the same command works from any terminal. On a machine without a
 desktop, setup offers neither, and the command runs the server in the current terminal.
 
 ## Requirements
 
-- Linux with Docker Engine, plus the NVIDIA Container Toolkit for NVIDIA GPUs.
+- Linux with Docker Engine, plus the NVIDIA Container Toolkit for NVIDIA GPUs; or a Mac with macOS 13.3 or newer
+  (no Docker). See [Linux](#linux) and [macOS](#macos).
 - Python 3.9 or newer. The tool uses only the standard library, so there is nothing to install from PyPI.
-- Disk space for the model, from about 5 GiB for a 9B at Q4_K_M to hundreds of GiB for a 397B, plus a few GB for
-  the llama.cpp image.
+- Disk space for the model, from about 5 GiB for a 9B at Q4_K_M to hundreds of GiB for a 397B, plus the llama.cpp
+  server: a few GB as a Docker image on Linux, about 12 MB on macOS.
 - Memory for the model and its context, from about 10.5 GiB for a 9B at Q4_K_M with a 32k context and vision off
   (ESTIMATED).
 
-`./ornith-launcher doctor` checks Docker, GPU access, disk space and the rest, and prints the exact command for
-each problem it finds. The launcher never runs `sudo` itself. Supported GPUs and distributions are listed in
-[docs/HARDWARE.md](docs/HARDWARE.md).
+`./ornith-launcher doctor` checks Docker or the macOS runtime, GPU access, disk space and the rest, and prints the
+exact command for each problem it finds. The launcher never runs `sudo` itself. Supported GPUs and distributions
+are listed in [docs/HARDWARE.md](docs/HARDWARE.md).
 
 ## Quick start
 
@@ -215,7 +267,8 @@ The first run shows the disclaimer and asks you to accept it. Then:
 2. Press Enter on the first suggestion.
 3. Press Enter at each step to take the recommended choice, and check the summary before the download starts.
 4. Answer the questions at the end: Claude Code or OpenCode, the terminal for the server window, the chat log,
-   and the optional desktop icon and applications menu entry. Enter takes the default each time.
+   the optional desktop icon and applications menu entry, and whether to open the coding tools with the model.
+   Enter takes the default each time.
 
 From then on:
 
@@ -392,36 +445,69 @@ are not changed. Setup creates these commands when you connect Claude Code; see
 
 Anthropic does not support Claude Code with non-Claude models; see [DISCLAIMER.md](DISCLAIMER.md).
 
+In auto mode, Claude Code checks each action it would otherwise ask you about by sending a separate request to the
+model, so through `ornith-claude` the local Ornith model makes those checks. Each check carries more than 140,000
+characters of Claude Code's own instructions (TESTED with Claude Code 2.1.312), so it adds a prefill wait before
+the action runs. Claude Code's checks are written for Claude models, and how well an Ornith model judges them has
+not been tested. Manual mode (Shift+Tab) asks you instead. The wrapper sets `CLAUDE_CODE_AUTO_MODE_SERVER=0`,
+because llama.cpp cannot run Anthropic's server-side checks; without it, Claude Code stops each auto mode session
+at a notice about classifier charges.
+
 ### OpenCode
 
-Pick "Ornith (local, ornith-launcher)" under `/models`. Uninstall removes only the entry setup added, and never
-entries you edited yourself.
+Pick "Ornith (local, ornith-launcher)" under `/models`, or nothing at all if you made it the default. Uninstall
+removes only the entry setup added, and never entries you edited yourself. It puts back the default model you had
+before setup, unless you picked another one since.
+
+Ornith models think before they answer, and OpenCode shows the thinking. They have no effort levels, so instead of
+low, medium and high the entry offers one variant, "no-thinking", for quick answers: pick it with OpenCode's
+variant switch or `opencode run --variant no-thinking`. Without a variant the model thinks.
+
+OpenCode's chat (the desktop app and `opencode web`) shows a picture when it is part of the model's reply, written
+as an image with a `data:` address, but not an image a tool read and not a file on disk (checked in OpenCode 1.19).
+So setup also adds a short file, `show-pictures.md` in the launcher's data folder, to OpenCode's `instructions`.
+OpenCode puts the files listed there into the system prompt of every session, for every model you use in
+OpenCode, and setup says so before you pick OpenCode and again when it adds the file. The file tells the model to
+draw charts and diagrams as SVG inside its reply. A model that can run commands writes the SVG to a file, and a
+short script checks it, encodes only `%` and `#` and prints the whole tag for the model to paste; otherwise it
+writes the tag by hand from a complete example and strict rules. Uninstall lists the file and takes it out again
+with the last Ornith model. With vision on, the model also sees the images you attach and the images its tools
+read.
 
 ## Safety and privacy
 
 - The server binds to `127.0.0.1` only, so other machines on your network cannot reach it.
-- Downloads are pinned and checked: the llama.cpp image by digest, model files by sha256.
+- Downloads are pinned and checked: the llama.cpp image by digest, the macOS llama.cpp build and model files by
+  sha256.
 - The launcher never runs `sudo`. When something needs root, such as adding you to the `docker` group, it prints
   the command for you to run.
 - It asks before installing software, deleting files or changing another tool's config, and backs up a config
   file before changing it.
 - It never moves, copies or deletes models that belong to other apps.
-- It sends no telemetry. It connects only to Hugging Face, ghcr.io for the llama.cpp image and, if you choose
-  them, the official Claude Code and OpenCode installers.
+- It sends no telemetry. It connects only to Hugging Face, ghcr.io for the llama.cpp image (Linux), the llama.cpp
+  releases on github.com (macOS) and, if you choose them, the official Claude Code and OpenCode installers.
 - Ctrl+C stops every long-running command cleanly, including the containers and processes it started.
 
 ## Removing things
 
 `./ornith-launcher uninstall` offers:
 
-- "Remove one setup" or "Remove all setups". For each setup you then choose the setup itself (its profile, launch
-  icons, coding-tool entries and the model it downloaded), the model server (the llama.cpp image), or both.
+- "Remove one setup". You then choose what goes:
+
+  | Choice | Removes |
+  |---|---|
+  | Setup only (the default) | The profile, its launch icon and menu entry, its OpenCode entry and its Claude Code wrapper and alias, where they exist. The model stays. |
+  | Setup and its model | The same, plus the model it downloaded. A model found elsewhere is never deleted, so this is not offered for one. |
+  | The model server | The llama.cpp image on Linux, or the llama.cpp runtime folder on macOS. The setup stays. |
+  | Setup, model and model server | All three. |
+
+- "Remove all setups" asks whether to keep the models they downloaded (the default) or delete them too.
 - "Remove unfinished downloads" deletes the downloads you stopped and keeps finished models.
-- "Remove everything" deletes all setups, every model it downloaded, the llama.cpp image it pulled and its own
+- "Remove everything" deletes all setups, every model it downloaded, the model server it fetched and its own
   settings.
 
 It removes only what the launcher's own records list. Models it found elsewhere on the machine are never touched,
-and the llama.cpp image is not offered if it was there before setup or another setup still uses it.
+and the model server is not offered if it was there before setup or another setup still uses it.
 `./ornith-launcher remove NAME` removes a single profile and asks before deleting downloaded files.
 
 ## What has been tested
@@ -429,9 +515,13 @@ and the llama.cpp image is not offered if it was there before setup or another s
 - Machine: NVIDIA DGX Spark (GB10, 128 GB unified memory, arm64) with Ubuntu 24.04.
 - Model: Ornith 1.5 35B-A3B. Its results are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md), each labelled
   TESTED, INFERRED or ESTIMATED.
+- On that machine: setup with a real download and resume, launching from the desktop icon, the chat log, Claude
+  Code and OpenCode through it, `setup --shortcuts`, every uninstall choice, and Ctrl+C in `bench`.
 - Untested: other Linux distributions, discrete NVIDIA, AMD and Intel GPUs, CPU-only machines, and every other
   model and size. Plans for them are ESTIMATED from the GGUF headers and the memory model, and the 397B is also
   marked UNTESTED LOCALLY.
+- macOS: not run on a Mac yet. Unit tests simulate a Mac's commands and run on Linux; every macOS figure is
+  ESTIMATED.
 
 Reports from other machines are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -449,7 +539,7 @@ Reports from other machines are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 | `ornith-launcher logs [NAME]` | Follow a server's own log; Ctrl+C closes only the log |
 | `ornith-launcher chat-log [NAME]` | Follow the chat log of a model that has one |
 | `ornith-launcher scan` | Show what fits this machine (read-only) |
-| `ornith-launcher doctor` | Check Docker, the GPU, disk, the image, profiles and tools (read-only) |
+| `ornith-launcher doctor` | Check Docker or the macOS runtime, the GPU, disk, profiles and tools (read-only) |
 | `ornith-launcher remove NAME` | Remove a profile; asks before deleting downloaded files |
 | `ornith-launcher uninstall` | Remove one setup, all setups, unfinished downloads, or everything the launcher created |
 | `ornith-launcher bench [NAME]` | Long-context retrieval and perplexity tests (long, hot GPU runs) |
@@ -471,13 +561,13 @@ Global options go before the command.
 | Option | What it does |
 |---|---|
 | `--model PATH` | Use this model file or folder and skip the search |
-| `--models-dir PATH` | Folder for downloaded models (default `~/.ornith-launcher/models`) |
+| `--models-dir PATH` | Folder for downloaded models (default `~/models/ornith-launcher`) |
 | `--port PORT` | Port for the server (default 18400, or the next free one) |
 | `--name NAME` | Profile name (default: made from the model and context) |
 | `--plain` | Numbered menus instead of full-screen lists |
 | `--yes` | Accept every default without asking |
 | `--accept-uncensored` | Accept an uncensored model with `--yes`; `--yes` alone never does |
-| `--repair NAME` | Put back what a profile needs: the image, a missing download, a changed model file |
+| `--repair NAME` | Put back what a profile needs: the model server, a missing download, a changed model file |
 | `--integrations NAME` | Connect an existing profile to Claude Code or OpenCode |
 | `--shortcuts NAME` | Add a desktop icon or applications menu entry for an existing profile |
 
@@ -489,6 +579,7 @@ Global options go before the command.
 | `--no-monitor` | Start the server and return |
 | `--chat-log` | Open the chat log window this time |
 | `--no-chat-log` | No chat log this time |
+| `--no-tools` | Do not open the coding tools this time |
 
 `scan` (`--version`, `--size`, `--source` and `--quant` can be given more than once):
 
@@ -511,7 +602,7 @@ Other commands:
 
 | Command | Option | What it does |
 |---|---|---|
-| `status` | `--command` | Also show the docker command |
+| `status` | `--command` | Also show the command that starts the server |
 | `chat-log` | `--window` | Open it in a new window, closing one that is still open |
 | `remove` | `--yes` | Accept the defaults |
 | `bench` | `--needle` | Long-context retrieval test |
@@ -527,9 +618,9 @@ Other commands:
 |---|---|
 | Settings and profiles | `~/.config/ornith-launcher` (or `$XDG_CONFIG_HOME/ornith-launcher`) |
 | Model catalog cache | `~/.cache/ornith-launcher` |
-| Downloaded models | `~/.ornith-launcher/models`, or the folder you pick |
+| Downloaded models | `~/models/ornith-launcher`, or the folder you pick |
 | Claude Code wrappers | `~/.local/bin/ornith-claude` and `~/.local/bin/ornith-claude-<profile>` |
-| Desktop icon and menu entry | Your desktop folder and `~/.local/share/applications` |
+| Desktop icon and menu entry | See [Linux](#linux) and [macOS](#macos) |
 
 | Environment variable | What it does |
 |---|---|
@@ -538,6 +629,100 @@ Other commands:
 | `HF_HOME`, `HF_HUB_CACHE` | Where the quick search looks for the Hugging Face cache |
 | `LLAMA_CACHE`, `OLLAMA_MODELS` | Where it looks for llama.cpp and Ollama models |
 | `XDG_CONFIG_HOME`, `XDG_DATA_HOME` | Where settings and menu entries go |
+
+## Linux
+
+Linux runs llama.cpp in Docker. This is the tested setup (a DGX Spark with Ubuntu 24.04); other distributions and
+GPUs are listed in [docs/HARDWARE.md](docs/HARDWARE.md).
+
+### Requirements on Linux
+
+- Docker Engine. Docker Desktop runs containers in a VM with its own memory limit, and `doctor` warns when that
+  limit is below the machine's memory.
+- For an NVIDIA GPU, the driver and the NVIDIA Container Toolkit. `doctor` prints the commands to install and
+  configure it.
+
+### The server on Linux
+
+Each profile runs in its own container, `ornith-launcher-NAME`, from a llama.cpp image pinned by digest and
+published on `127.0.0.1` only. `docker logs ornith-launcher-NAME` shows the same log as `./ornith-launcher logs`.
+
+### One-click launch on Linux
+
+The icon and the menu entry are `.desktop` files named "Ornith: NAME": one in your desktop folder (from
+`~/.config/user-dirs.dirs`, else `~/Desktop`) and one in `~/.local/share/applications`. On GNOME the launcher marks
+its own desktop icon as trusted, so it starts on the first double-click. Other desktops may ask you to allow
+launching once. If you turned on the chat log, right-clicking the icon or menu entry also offers "Show chat log",
+on desktops that show actions.
+
+The terminals it can open are the system default and GNOME Terminal, Konsole, Ptyxis, GNOME Console, kitty,
+Alacritty, WezTerm, foot, Xfce Terminal, Tilix, Terminator, MATE Terminal, LXTerminal and xterm, when installed.
+
+## macOS
+
+macOS runs the llama.cpp release build for the Mac as a normal process, without Docker. This support is new: it
+has not run on a Mac yet, and the behaviour below is what the code does, checked by unit tests that simulate a
+Mac. Reports from Mac users are welcome.
+
+### Requirements on macOS
+
+- macOS 13.3 or newer, which the pinned llama.cpp build needs. Setup stops with that message on older versions.
+- An Apple Silicon Mac, where the model runs on the GPU through Metal. An Intel Mac runs it on the CPU only, which
+  is much slower, so only small models are practical there.
+- Python 3.9 or newer: `xcode-select --install` provides 3.9, or install a newer one with `brew install python`.
+  The launcher finds `python3.12` and the like next to an older `python3`.
+
+### The server on macOS
+
+The first setup downloads llama.cpp b11552 for macOS (about 12 MB) from the llama.cpp releases on GitHub, checks
+it against its pinned sha256 and unpacks the whole folder into `~/.local/share/ornith-launcher/runtime`. Each
+profile's server then runs from there on `127.0.0.1` only, in its own session, so Ctrl+C in the server window asks
+before stopping it and closing the window leaves it running. Its log is in
+`~/.local/state/ornith-launcher/logs/NAME.log`. While it runs, `caffeinate` keeps the Mac from sleeping when idle,
+so a long prompt is not cut off; closing the lid still puts it to sleep.
+
+The GPU on a Mac can use only part of the memory, a limit Metal sets. Setup plans against that limit. Before the
+runtime is installed it uses an estimate (two thirds of the memory up to 36 GiB, three quarters above, ESTIMATED);
+after that it reads the limit from llama.cpp. The launcher never changes the limit.
+
+Files the launcher downloads itself are not marked as coming from the internet, so Gatekeeper should not block
+them. If `./ornith-launcher doctor` finds that mark on the runtime, it prints the `xattr` command that clears it.
+
+macOS reports no GPU temperature without root, so the server window shows memory and swap but no temperature,
+and `bench` cannot pause for heat.
+
+### One-click launch on macOS
+
+The icon and the menu entry are `.command` files named "Ornith NAME.command": one on your Desktop and one in
+`~/Applications`, where Finder and Spotlight find it. Finder opens them in Terminal. If macOS asks before opening
+one the first time, choose Open. A `.command` file has no right-click actions, so reopen the chat log with c and
+Enter in the server window, or with `./ornith-launcher chat-log NAME`.
+
+The terminals it can open are Terminal (the default), iTerm2 when installed, and kitty, Alacritty and WezTerm
+when they are on your PATH. Terminal and iTerm2 are opened with `open -a` and a small script that deletes itself,
+so macOS does not ask for Automation permission.
+
+### Other differences on macOS
+
+- The quick search for models already on the Mac skips `~/Downloads`, because macOS asks before an app reads
+  that folder. Give a path in it with `p`, and macOS asks once.
+- Claude Code and OpenCode use the same official installers and config files as on Linux. If `~/.local/bin` is
+  not on your PATH, setup prints the line to add to `~/.zprofile`.
+
+| What | Where on macOS |
+|---|---|
+| llama.cpp runtime | `~/.local/share/ornith-launcher/runtime` |
+| Server logs | `~/.local/state/ornith-launcher/logs` |
+| Desktop icon and menu entry | `~/Desktop` and `~/Applications` |
+
+To check it on a Mac, with any Ornith GGUF that fits:
+
+```
+ORNITH_IT=1 ORNITH_IT_MODEL=/path/to/model.gguf python3 -m unittest tests.integration.test_native -v
+```
+
+It installs the runtime into a temporary folder, starts and stops a server, and prints the Metal limit and
+llama.cpp's own memory estimate.
 
 ## More
 

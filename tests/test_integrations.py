@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import urllib.parse
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -105,6 +107,8 @@ class ClaudeWrapperTest(unittest.TestCase):
         self.assertIn("ANTHROPIC_DEFAULT_FABLE_MODEL=ornith-1.5-35b-q8_0", out)
         self.assertIn("CLAUDE_CODE_MAX_CONTEXT_TOKENS=262144", out)
         self.assertIn("API_TIMEOUT_MS=600000", out)
+        # Auto mode would otherwise ask the local server for checks it cannot answer.
+        self.assertIn("CLAUDE_CODE_AUTO_MODE_SERVER=0", out)
         self.assertIn("args: --continue", out)
 
     @unittest.skipUnless(SH and os.name != "nt", "needs a POSIX shell")
@@ -155,6 +159,124 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual(ours["models"]["ornith-1.5-35b-q8_0"]["limit"]["context"], 262144)
         self.assertEqual(
             opencode.without(once, "ornith-launcher", "ornith-1.5-35b-q8_0"), self.existing
+        )
+
+    def test_vision_is_declared_only_when_the_projector_is_on(self):
+        text_only = opencode.model_entry(self.profile, "x")
+        self.assertNotIn("modalities", text_only)
+        self.assertNotIn("attachment", text_only)
+        self.profile.model.mmproj = str(Path(self.tmp.name) / "mmproj-Ornith-1.5-35B-BF16.gguf")
+        vision = opencode.model_entry(self.profile, "x")
+        self.assertTrue(vision["attachment"])
+        self.assertEqual(vision["modalities"], {"input": ["text", "image"], "output": ["text"]})
+
+    def test_the_model_thinks_and_offers_only_a_way_to_turn_thinking_off(self):
+        entry = opencode.model_entry(self.profile, "x")
+        self.assertTrue(entry["reasoning"])
+        self.assertEqual(
+            entry["variants"],
+            {
+                "low": {"disabled": True},
+                "medium": {"disabled": True},
+                "high": {"disabled": True},
+                "no-thinking": {"chat_template_kwargs": {"enable_thinking": False}},
+            },
+        )
+
+    def test_the_projector_file_says_which_inputs_the_model_takes(self):
+        path = Path(self.tmp.name) / "mmproj.gguf"
+        self.profile.model.mmproj = str(path)
+        cases = {
+            "vision": ([("clip.has_vision_encoder", ValueType.BOOL, True)], ["image"]),
+            "audio": (
+                [
+                    ("clip.has_vision_encoder", ValueType.BOOL, False),
+                    ("clip.has_audio_encoder", ValueType.BOOL, True),
+                ],
+                ["audio"],
+            ),
+            "both": (
+                [
+                    ("clip.has_vision_encoder", ValueType.BOOL, True),
+                    ("clip.has_audio_encoder", ValueType.BOOL, True),
+                ],
+                ["image", "audio"],
+            ),
+            "older file without the keys": ([("general.name", ValueType.STRING, "x")], ["image"]),
+        }
+        for label, (pairs, inputs) in cases.items():
+            with self.subTest(label):
+                path.write_bytes(gguf_bytes(pairs))
+                entry = opencode.model_entry(self.profile, "x")
+                self.assertEqual(entry["modalities"]["input"], ["text", *inputs])
+                self.assertEqual(entry["modalities"]["output"], ["text"])
+        path.write_bytes(b"not a gguf")
+        self.assertEqual(opencode.projector_inputs(str(path)), ["image"])
+
+    def test_picture_instructions_are_added_once_and_go_with_our_last_model(self):
+        pictures = Path(self.tmp.name) / "data" / "opencode" / opencode.PICTURES_NAME
+        mine = {**self.existing, "instructions": ["~/notes.md"]}
+        once = opencode.merged(mine, self.profile, "ornith-launcher", "x", pictures)
+        twice = opencode.merged(once, self.profile, "ornith-launcher", "x", pictures)
+        self.assertEqual(twice["instructions"], ["~/notes.md", str(pictures)])
+        other = profile(Path(self.tmp.name), name="other", port=18401)
+        both = opencode.merged(twice, other, "ornith-launcher-other", "y", pictures)
+        # One of our models is left, so the instructions stay.
+        one_left = opencode.without(both, "ornith-launcher", "ornith-1.5-35b-q8_0")
+        self.assertIn(str(pictures), one_left["instructions"])
+        none_left = opencode.without(one_left, "ornith-launcher-other", other.runtime.alias)
+        self.assertEqual(none_left["instructions"], ["~/notes.md"])
+        # A list that held only ours is removed, as setup found the file without one.
+        ours_only = opencode.merged(self.existing, self.profile, "ornith-launcher", "x", pictures)
+        self.assertEqual(
+            opencode.without(ours_only, "ornith-launcher", "ornith-1.5-35b-q8_0"), self.existing
+        )
+
+    def test_the_picture_example_follows_its_own_rules(self):
+        # A raw # ends the data: URI and the chat shows a broken image (seen in OpenCode 1.19).
+        import re
+
+        prefix = "data:image/svg+xml;utf8,"
+        tags = re.findall(r'^<img src="([^"]*)">$', opencode.PICTURES, re.MULTILINE)
+        self.assertEqual(len(tags), 1)
+        self.assertTrue(tags[0].startswith(prefix))
+        self.assertNotIn("#", tags[0])
+        svg = ET.fromstring(tags[0][len(prefix) :])
+        self.assertEqual(svg.tag, "{http://www.w3.org/2000/svg}svg")
+
+    def test_the_scripted_picture_tag_has_none_of_the_characters_that_break_it(self):
+        # The way the instructions describe for a model that can run commands: only % and
+        # # are encoded, so the tag stays readable and the model copies it exactly.
+        svg = (
+            "<svg xmlns='http://www.w3.org/2000/svg' width='50%'>\n"
+            "  <defs><marker id='arrow'/></defs>\n"
+            "  <line stroke='#cccccc' marker-end='url(#arrow)'/>\n"
+            "  <text fill='#333'>θ and √13</text>\n"
+            "</svg>\n"
+        )
+        self.assertIn("Replace every % with %25, then every # with %23", opencode.PICTURES)
+        body = " ".join(svg.replace("%", "%25").replace("#", "%23").splitlines())
+        for char in '#&"\n':
+            self.assertNotIn(char, body)
+        self.assertEqual(" ".join(urllib.parse.unquote(body).split()), " ".join(svg.split()))
+
+    def test_the_default_model_goes_back_only_while_it_is_still_ours(self):
+        record = {"default_model": "ornith-launcher/a", "previous_model": "spark/qwen"}
+        config = {"model": "ornith-launcher/a", "provider": {}}
+        self.assertEqual(opencode.default_after_removal(config, record)["model"], "spark/qwen")
+        changed = {"model": "lmstudio/gemma"}
+        self.assertEqual(opencode.default_after_removal(changed, record), changed)
+        none_before = {**record, "previous_model": None}
+        self.assertNotIn("model", opencode.default_after_removal(config, none_before))
+        # The default before was another of our models, removed since: nothing to point at.
+        gone = {**record, "previous_model": "ornith-launcher/b"}
+        self.assertNotIn("model", opencode.default_after_removal(config, gone))
+        still_there = {
+            "model": "ornith-launcher/a",
+            "provider": {"ornith-launcher": {"models": {"b": {}}}},
+        }
+        self.assertEqual(
+            opencode.default_after_removal(still_there, gone)["model"], "ornith-launcher/b"
         )
 
     def test_a_different_port_gets_its_own_provider(self):
@@ -214,7 +336,7 @@ class ConfigureTest(unittest.TestCase):
         return PlainPrompter(read_line=lambda p: next(replies), out=self.out)
 
     def test_both_tools(self):
-        integrations.configure(self.app, self.prompter(), self.profile, integrations.BOTH)
+        integrations.configure(self.app, self.prompter("n"), self.profile, integrations.BOTH)
         template = self.profile.runtime.template
         self.assertEqual(template.source, "patched")
         self.assertEqual(template.rule, "late-system-raises")
@@ -232,9 +354,11 @@ class ConfigureTest(unittest.TestCase):
         self.assertIn(claude_code.ANTHROPIC_NOTICE.split(":")[0], claude_code.ANTHROPIC_NOTICE)
 
     def test_switching_to_opencode_only_undoes_claude(self):
-        integrations.configure(self.app, self.prompter(), self.profile, integrations.BOTH)
+        integrations.configure(self.app, self.prompter("n"), self.profile, integrations.BOTH)
         patched = Path(self.profile.runtime.template.file)
-        integrations.configure(self.app, self.prompter(), self.profile, integrations.OPENCODE_ONLY)
+        integrations.configure(
+            self.app, self.prompter("n"), self.profile, integrations.OPENCODE_ONLY
+        )
         self.assertNotIn("claude_code", self.profile.integrations)
         self.assertEqual(self.profile.runtime.template.source, "gguf")
         self.assertFalse(patched.exists())
@@ -249,10 +373,59 @@ class ConfigureTest(unittest.TestCase):
         )
         self.assertIn("// mine", self.opencode_file.read_text())
         self.assertIn('"ornith-launcher"', self.out.getvalue())
+        self.assertIn('"model": "ornith-launcher/ornith-1.5-35b-q8_0"', self.out.getvalue())
         integrations.configure(
-            self.app, self.prompter("y"), self.profile, integrations.OPENCODE_ONLY
+            self.app, self.prompter("y", "n"), self.profile, integrations.OPENCODE_ONLY
         )
         self.assertIn("ornith-launcher", json.loads(self.opencode_file.read_text())["provider"])
+
+    def test_the_default_model_is_asked_and_put_back_on_removal(self):
+        self.opencode_file.write_text(json.dumps({"model": "lmstudio/gemma", "provider": {}}))
+        integrations.configure(
+            self.app, self.prompter(""), self.profile, integrations.OPENCODE_ONLY
+        )
+        self.assertEqual(
+            json.loads(self.opencode_file.read_text())["model"],
+            "ornith-launcher/ornith-1.5-35b-q8_0",
+        )
+        self.assertIn("puts the default back to lmstudio/gemma", self.out.getvalue())
+        # Setup again: no question, and the default it replaced first is kept.
+        integrations.configure(self.app, self.prompter(), self.profile, integrations.OPENCODE_ONLY)
+        self.assertEqual(self.profile.integrations["opencode"]["previous_model"], "lmstudio/gemma")
+        opencode.remove_entry(self.app, self.profile)
+        self.assertEqual(json.loads(self.opencode_file.read_text())["model"], "lmstudio/gemma")
+        self.assertIn("default model is lmstudio/gemma again", self.out.getvalue())
+
+    def test_opencode_gets_the_picture_instructions_without_asking(self):
+        integrations.configure(
+            self.app, self.prompter("n"), self.profile, integrations.OPENCODE_ONLY
+        )
+        config = json.loads(self.opencode_file.read_text())
+        pictures = Path(config["instructions"][0])
+        self.assertTrue(pictures.is_relative_to(self.app.paths.data))
+        self.assertIn("data:image/svg+xml;utf8,", pictures.read_text())
+        # Setup says what it added, where, and that it reaches every model's sessions.
+        said = " ".join(self.out.getvalue().split())
+        self.assertIn(f"Added picture instructions to OpenCode's instructions: {pictures}", said)
+        self.assertIn("system prompt of every session, for every model", said)
+        opencode.remove_entry(self.app, self.profile)
+        self.assertNotIn("instructions", json.loads(self.opencode_file.read_text()))
+
+    def test_claude_code_is_the_suggested_choice(self):
+        self.assertEqual(integrations.choose(self.app, self.prompter("")), integrations.CLAUDE_ONLY)
+        self.assertIn("Claude Code             suggested", self.out.getvalue())
+        # The picture instructions are disclosed before the user picks OpenCode.
+        said = " ".join(self.out.getvalue().split())
+        self.assertIn("OpenCode also gets picture instructions", said)
+        self.assertIn("system prompt of every OpenCode session, for every model", said)
+
+    def test_no_keeps_the_users_default(self):
+        self.opencode_file.write_text(json.dumps({"model": "lmstudio/gemma", "provider": {}}))
+        integrations.configure(
+            self.app, self.prompter("n"), self.profile, integrations.OPENCODE_ONLY
+        )
+        self.assertEqual(json.loads(self.opencode_file.read_text())["model"], "lmstudio/gemma")
+        self.assertNotIn("default_model", self.profile.integrations["opencode"])
 
     def test_missing_tool_is_installed_only_with_consent(self):
         del self.host.programs["claude"]

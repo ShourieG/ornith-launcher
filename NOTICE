@@ -13,8 +13,8 @@ respective owners and are used only to describe compatibility.
 Third-party software used at runtime is not distributed with this project:
 
   llama.cpp (MIT License, ggml.org). On Linux it runs from the official Docker
-  images; on Windows and macOS from the official release binaries. Both are
-  downloaded by the user from their publishers.
+  images; on macOS from the official release build. Both are downloaded on the
+  user's machine from their publishers.
 
 Model weights are not distributed with this project. Users download them from
 Hugging Face, and each model is under its own licence.

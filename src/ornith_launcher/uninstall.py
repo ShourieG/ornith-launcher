@@ -6,21 +6,24 @@ everything.
 
 Only what ornith-launcher itself made is ever removed, and that is read from its
 own files: the profiles, and the record in ``installed.py`` (downloads, desktop
-icons, applications-menu entries, pulled images). Model files found on the
-machine or entered by the user are never deleted or offered for deletion.
+icons, applications-menu entries, pulled images, and on macOS the llama.cpp
+runtime it downloaded). Model files found on the machine or entered by the user
+are never deleted or offered for deletion.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ornith_launcher import chat_log
 from ornith_launcher.app import App
-from ornith_launcher.installed import forget, load_installed
+from ornith_launcher.installed import downloaded_here, forget, load_installed
+from ornith_launcher.integrations import opencode
 from ornith_launcher.profiles import Profile, delete_profile, list_profiles, load_profile
-from ornith_launcher.runtime.docker import DockerRuntime, digest_reference
+from ornith_launcher.runtime.native import Runtime
 from ornith_launcher.settings import load_settings, save_settings
 from ornith_launcher.ui.prompts import BACK, Cancelled, Choice, PlainPrompter
 from ornith_launcher.unfinished import Unfinished, forget_choices, unfinished_downloads
@@ -51,11 +54,39 @@ def tool_entries(profile: Profile) -> list[str]:
             f"OpenCode: the model {profile.runtime.alias} (provider {opencode['provider']}) in "
             f"{opencode['config']}; a backup of the file is kept"
         )
+        if opencode.get("default_model"):
+            entries.append(
+                "OpenCode: the default model goes back to "
+                f"{opencode.get('previous_model') or 'none'}, unless you changed it since"
+            )
+        entries.extend(
+            f"OpenCode: the picture instructions {entry}, which go with the last Ornith model"
+            for entry in _pictures_removed(opencode, profile)
+        )
     claude = profile.integrations.get("claude_code") or {}
     for key in ("wrapper", "alias"):
         if claude.get(key) and (Path(claude[key]).exists() or Path(claude[key]).is_symlink()):
             entries.append(f"Claude Code: {claude[key]}")
     return entries
+
+
+def _pictures_removed(record: dict, profile: Profile) -> list[str]:
+    path = Path(record["config"])
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []  # a file with comments or broken JSON is left for the user to edit
+    if not isinstance(config, dict):
+        return []
+    return opencode.pictures_removed(config, record["provider"], profile.runtime.alias)
+
+
+def downloaded(app: App, profile: Profile) -> bool:
+    """Whether the launcher downloaded this profile's model, by the profile or its own record.
+
+    The record also covers profiles made before setup marked a found download as its own.
+    """
+    return profile.model.location == "managed" or downloaded_here(app.paths, profile.model.parts)
 
 
 def other_profiles_using(app: App, profile: Profile, path: str) -> list[str]:
@@ -90,14 +121,12 @@ def remove_created(app: App, profile: Profile) -> None:
         Path(template.file).unlink(missing_ok=True)
 
 
-def remove_profile(
-    app: App, profile: Profile, runtime: DockerRuntime, prompter: PlainPrompter
-) -> None:
+def remove_profile(app: App, profile: Profile, runtime: Runtime, prompter: PlainPrompter) -> None:
     """``remove NAME``: everything the profile made, then a question about its download."""
     runtime.stop(profile)
     chat_log.shutdown(app, profile.name)
     remove_created(app, profile)
-    if profile.model.location != "managed":
+    if not downloaded(app, profile):
         app.say(f"The model file stays where it is: {profile.model.parts[0]}")
         return
     files = [p for p in [*profile.model.parts, profile.model.mmproj] if p]
@@ -125,7 +154,8 @@ class Removal:
     model_files: list[Path] = field(default_factory=list)  # downloads recorded as ours
     shortcuts: list[Path] = field(default_factory=list)  # icons and menu entries recorded as ours
     kept_models: list[Path] = field(default_factory=list)  # not downloaded by us: never deleted
-    images: list[str] = field(default_factory=list)  # Docker references we pulled
+    kept_by_choice: list[Path] = field(default_factory=list)  # downloaded, but the user keeps them
+    images: list[str] = field(default_factory=list)  # Docker references or runtimes we fetched
     folders: list[Path] = field(default_factory=list)  # our own folders (everything only)
 
     @property
@@ -139,8 +169,14 @@ class Removal:
         return sum(p.stat().st_size for p in self.model_files if p.exists())
 
 
-def plan_removal(app: App, profiles: list[Profile], everything: bool = False) -> Removal:
-    """Only files the profiles or the install record say the launcher made are listed."""
+def plan_removal(
+    app: App, profiles: list[Profile], everything: bool = False, keep_models: bool = False
+) -> Removal:
+    """Only files the profiles or the install record say the launcher made are listed.
+
+    ``keep_models``: remove the setups but keep the models they downloaded; those stay
+    recorded, so a later "Remove everything" still offers them.
+    """
     installed = load_installed(app.paths)
     removing = {p.name for p in profiles}
     kept_profiles = [load_profile(app.paths, n) for n in list_profiles(app.paths)]
@@ -163,6 +199,10 @@ def plan_removal(app: App, profiles: list[Profile], everything: bool = False) ->
             continue
         if path in in_use:
             continue
+        if keep_models:
+            if Path(path).exists():
+                removal.kept_by_choice.append(Path(path))
+            continue
         for suffix in PARTIAL_SUFFIXES:
             file = Path(path + suffix)
             if file.exists():
@@ -172,7 +212,7 @@ def plan_removal(app: App, profiles: list[Profile], everything: bool = False) ->
         shortcuts += installed.shortcuts
     removal.shortcuts = [Path(s) for s in dict.fromkeys(shortcuts) if Path(s).exists()]
     if everything:
-        removal.images = list(installed.images)
+        removal.images = list(installed.images) + list(installed.runtimes)
         paths = app.paths
         removal.folders = [
             p for p in (paths.config, paths.data, paths.cache, paths.state) if p.exists()
@@ -182,7 +222,9 @@ def plan_removal(app: App, profiles: list[Profile], everything: bool = False) ->
 
 def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
     """The uninstall choices; returns NOTHING, REMOVED or EVERYTHING."""
-    runtime = DockerRuntime(app.host)
+    from ornith_launcher.launch import make_runtime
+
+    runtime = make_runtime(app)
     while True:
         names = list_profiles(app.paths)
         unfinished = unfinished_downloads(app.paths)
@@ -213,8 +255,8 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
                 "everything",
                 (
                     "Remove everything",
-                    "all setups, every model it downloaded, the llama.cpp image it pulled "
-                    "and its own settings",
+                    f"all setups, every model it downloaded, the {runtime.server_noun} it "
+                    f"{runtime.fetched} and its own settings",
                 ),
             )
         )
@@ -243,20 +285,26 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
             parts = _choose_parts(app, prompter, profile, runtime)
             if parts is None:
                 continue
-            setup, server = parts
-            removal = plan_removal(app, [profile]) if setup else Removal()
+            setup, model, server = parts
+            removal = plan_removal(app, [profile], keep_models=not model) if setup else Removal()
             if server:
                 removal.images = [profile.runtime.image]
+        elif action == "all":
+            keep = _keep_models(prompter)
+            if keep is None:
+                continue
+            profiles = [load_profile(app.paths, name) for name in names]
+            removal = plan_removal(app, profiles, keep_models=keep)
         else:
             profiles = [load_profile(app.paths, name) for name in names]
             removal = plan_removal(app, profiles, everything=everything)
-        if not _confirm(app, prompter, removal):
+        if not _confirm(app, prompter, removal, runtime):
             continue
         apply_removal(app, removal, runtime)
         return EVERYTHING if everything else REMOVED
 
 
-def apply_removal(app: App, removal: Removal, runtime: DockerRuntime) -> None:
+def apply_removal(app: App, removal: Removal, runtime: Runtime) -> None:
     settings = load_settings(app.paths)
     app.say()
     for profile in removal.profiles:
@@ -280,21 +328,25 @@ def apply_removal(app: App, removal: Removal, runtime: DockerRuntime) -> None:
         # A running server of ours would make Docker refuse to remove its image.
         for name in list_profiles(app.paths):
             other = load_profile(app.paths, name)
-            if digest_reference(other.runtime.image) == digest_reference(reference):
+            if runtime.same_reference(other.runtime.image, reference):
                 runtime.stop(other)
                 chat_log.shutdown(app, other.name)
         outcome, reason = runtime.remove_image(reference)
         if outcome == "failed":
-            app.say(f"  Docker did not remove the llama.cpp image ({reason}).")
-            app.say(f"    Remove it later with: docker image rm {reference.split('@')[0]}")
+            if runtime.kind == "docker":
+                app.say(f"  Docker did not remove the llama.cpp image ({reason}).")
+                app.say(f"    Remove it later with: docker image rm {reference.split('@')[0]}")
+            else:
+                app.say(f"  Could not delete the {runtime.server_noun} ({reason}).")
+                app.say(f"    Delete it later with: rm -rf {runtime.folder(reference)}")
             continue
-        forget(app.paths, "images", reference)
+        forget(app.paths, runtime.record_kind, reference)
         if outcome == "kept":
             app.say(
                 "  Removed the launcher's reference to the llama.cpp image; other tags keep it."
             )
         else:
-            app.say("  Deleted the llama.cpp image.")
+            app.say(f"  Deleted the {runtime.server_noun}.")
     for folder in removal.folders:
         shutil.rmtree(folder, ignore_errors=True)
         app.say(f"  Deleted {folder}")
@@ -336,7 +388,7 @@ def _choose_profile(app: App, prompter: PlainPrompter, names: list[str]) -> Prof
                     f"{p.model.version or '?'} {p.model.size_class or ''} {p.model.quant or ''}",
                     "yes" if p.integrations.get("desktop_copy") else "-",
                     "yes" if p.integrations.get("shortcut") else "-",
-                    "downloaded" if p.model.location == "managed" else "found elsewhere (kept)",
+                    "downloaded" if downloaded(app, p) else "found elsewhere (kept)",
                 )
             )
             for p in profiles
@@ -346,23 +398,22 @@ def _choose_profile(app: App, prompter: PlainPrompter, names: list[str]) -> Prof
     return None if picked == BACK else profiles[int(picked)]
 
 
-def server_kept_reason(app: App, profile: Profile, runtime: DockerRuntime) -> str:
+def server_kept_reason(app: App, profile: Profile, runtime: Runtime) -> str:
     """Why the model server cannot go with this setup, or "" when it can.
 
     Only an image this launcher pulled is offered, and only when no other setup needs it.
     """
     reference = profile.runtime.image
-    if reference not in load_installed(app.paths).images:
+    if reference not in getattr(load_installed(app.paths), runtime.record_kind):
         return (
-            "The model server (llama.cpp image) was already on this machine before "
-            "ornith-launcher pulled it, so it is kept."
+            f"The model server ({runtime.server_noun}) was already on this machine before "
+            f"ornith-launcher {runtime.fetched} it, so it is kept."
         )
     others = [
         name
         for name in list_profiles(app.paths)
         if name != profile.name
-        and digest_reference(load_profile(app.paths, name).runtime.image)
-        == digest_reference(reference)
+        and runtime.same_reference(load_profile(app.paths, name).runtime.image, reference)
     ]
     if others:
         users = " and ".join(others) if len(others) < 3 else f"{len(others)} other setups"
@@ -374,42 +425,68 @@ def server_kept_reason(app: App, profile: Profile, runtime: DockerRuntime) -> st
 
 
 def _choose_parts(
-    app: App, prompter: PlainPrompter, profile: Profile, runtime: DockerRuntime
-) -> tuple[bool, bool] | None:
-    """(remove the setup, remove the model server) for one setup, or None for Back."""
+    app: App, prompter: PlainPrompter, profile: Profile, runtime: Runtime
+) -> tuple[bool, bool, bool] | None:
+    """(remove the setup, its model, the model server) for one setup, or None for Back.
+
+    "Setup only" comes first and is the default: it keeps the model, so a setup can be
+    removed and made again without downloading the model twice.
+    """
     reason = server_kept_reason(app, profile, runtime)
-    things = ["setup"]
+    things = ["profile"]
     if profile.integrations.get("desktop_copy"):
         things.append("launch icon")
     if profile.integrations.get("shortcut"):
         things.append("menu entry")
     if (profile.integrations.get("opencode") or {}).get("provider"):
         things.append("OpenCode entry")
-    if profile.integrations.get("claude_code"):
-        things.append("Claude Code wrapper")
-    managed = profile.model.location == "managed"
-    if managed:
-        things.append("the model it downloaded")
-    label = _joined(things)
+    claude = profile.integrations.get("claude_code") or {}
+    if claude.get("wrapper"):
+        things.append("Claude Code wrapper" + (" and alias" if claude.get("alias") else ""))
+    managed = downloaded(app, profile)
+    size = sum(p.stat().st_size for p in map(Path, _model_files(profile)) if p.exists())
+    model_note = (
+        f"also deletes the model it downloaded ({size / GIB:.1f} GiB)"
+        if managed
+        else "the model was found on this machine, so it is never deleted"
+    )
     picked = prompter.choose(
         f"Remove {profile.name}:",
         ["Part", "Note"],
         [
+            Choice(("Setup only", f"{_joined(things)}; the model stays")),
+            Choice(("Setup and its model", model_note), enabled=managed),
+            Choice(("The model server", f"the {runtime.server_noun}"), enabled=not reason),
             Choice(
                 (
-                    label[0].upper() + label[1:],
-                    "" if managed else "the model file stays where it is",
-                )
+                    "Setup, model and model server" if managed else "Setup and model server",
+                    "everything above" if managed else "the model file stays where it is",
+                ),
+                enabled=not reason,
             ),
-            Choice(("The model server", "the llama.cpp image"), enabled=not reason),
-            Choice(("Both", ""), enabled=not reason),
         ],
         notice=reason,
         back=True,
     )
     if picked == BACK:
         return None
-    return picked in (0, 2), picked in (1, 2)
+    return picked in (0, 1, 3), picked in (1, 3), picked in (2, 3)
+
+
+def _keep_models(prompter: PlainPrompter) -> bool | None:
+    """For "Remove all setups": keep the models they downloaded (default), or delete them."""
+    picked = prompter.choose(
+        "Remove all setups:",
+        ["Part", "Note"],
+        [
+            Choice(("Setups only", "profiles, launch icons and coding-tool entries; models stay")),
+            Choice(("Setups and their models", "also deletes the models they downloaded")),
+        ],
+        back=True,
+    )
+    if picked == BACK:
+        return None
+    return picked == 0
 
 
 def _joined(words: list[str]) -> str:
@@ -417,7 +494,7 @@ def _joined(words: list[str]) -> str:
     return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
 
 
-def _confirm(app: App, prompter: PlainPrompter, removal: Removal) -> bool:
+def _confirm(app: App, prompter: PlainPrompter, removal: Removal, runtime: Runtime) -> bool:
     prompter.new_screen("Uninstall: what will be deleted")
     if removal.empty:
         app.say("Nothing that ornith-launcher created is left to remove.")
@@ -430,8 +507,15 @@ def _confirm(app: App, prompter: PlainPrompter, removal: Removal) -> bool:
             f"Downloaded model files ({removal.size / GIB:.1f} GiB)",
             [str(p) for p in removal.model_files],
         ),
-        ("The model server (llama.cpp image)", [r.split("@")[0] for r in removal.images]),
+        (
+            f"The model server ({runtime.server_noun})",
+            [
+                r.split("@")[0] if runtime.kind == "docker" else str(runtime.folder(r))
+                for r in removal.images
+            ],
+        ),
         ("ornith-launcher's own folders", [str(p) for p in removal.folders]),
+        ("Kept (you chose to keep the model)", [str(p) for p in removal.kept_by_choice]),
         ("Kept (not downloaded by ornith-launcher)", [str(p) for p in removal.kept_models]),
     ]
     first = True

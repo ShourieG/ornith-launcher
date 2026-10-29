@@ -22,22 +22,24 @@ python3 -m venv .venv && .venv/bin/pip install ruff
 
 ```
 python3 -m unittest discover -s tests -t .                       # unit tests
-ORNITH_IT=1 python3 -m unittest discover -s tests/integration -t .   # integration tests (Docker)
+ORNITH_IT=1 python3 -m unittest discover -s tests/integration -t .   # integration tests (Docker, or a Mac)
 ruff check . && ruff format --check .                            # lint and format
 shellcheck ornith-launcher                                       # entry script
 ```
 
-CI runs the unit tests on Linux with Python 3.9 and the latest Python, plus ruff and shellcheck. The macOS and
-Windows jobs are switched off for now (see `.github/workflows/ci.yml`), so run the tests on those systems yourself if
-your change touches platform code.
+CI runs the unit tests on Linux with Python 3.9 and the latest Python, plus ruff and shellcheck. The macOS job is
+switched off for now (see `.github/workflows/ci.yml`), so if your change touches macOS code, run the unit tests
+on a Mac too. The integration tests need a model file: `ORNITH_IT_MODEL=/path/to/model.gguf`. On Linux they use
+Docker and a GPU; on a Mac, `tests.integration.test_native` installs the pinned llama.cpp build into a temporary
+folder. Windows is not supported yet.
 
 ## Code rules
 
 - The runtime uses the Python standard library only. A pull request that adds a runtime dependency will not be
   merged.
 - The `ornith-launcher` entry script is POSIX `sh`, because macOS ships bash 3.2.
-- Code must work on Linux, macOS and Windows: use `pathlib`, and avoid `curses`, `os.pwrite` and other POSIX-only
-  calls outside the platform helpers.
+- Code must work on Linux and macOS, and stay portable to Windows, which comes later: use `pathlib`, and avoid
+  `curses`, `os.pwrite` and other POSIX-only calls outside the platform helpers.
 - Pure logic stays free of side effects and has unit tests. Network, process and file-system access goes behind
   small interfaces that tests can fake.
 - Error messages say what went wrong and give the exact command or step that fixes it.

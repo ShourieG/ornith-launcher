@@ -14,8 +14,9 @@ runs them; reports are welcome.
 | Linux, AMD APU (unified memory) or other GPUs | Docker, `server-vulkan` | Untested |
 | Linux, Intel GPU (amd64) | Docker, `server-intel` | Untested |
 | Linux, no GPU | Docker, `server` (CPU) | Untested |
-| Windows | Native llama.cpp, no Docker | Planned |
-| macOS (Apple Silicon) | Native llama.cpp with Metal, no Docker | Planned |
+| Windows | Native llama.cpp, no Docker | Planned for a later release |
+| macOS 13.3 or newer, Apple Silicon | Native llama.cpp b11552 with Metal, no Docker | Built, not yet run on a Mac |
+| macOS 13.3 or newer, Intel | Native llama.cpp b11552 on the CPU, no Docker | Built, not yet run on a Mac |
 
 ## Linux distributions
 
@@ -50,12 +51,18 @@ GPU, and a VRAM pool per discrete GPU next to a system RAM pool. A plan must lea
 memory the system already uses. On a discrete GPU, Mixture-of-Experts models (35B, 122B, 397B) can keep their
 experts in system RAM (`--cpu-moe`); that placement is ESTIMATED.
 
+On a Mac the GPU can use only part of the memory, a limit Metal sets, so the plan uses that limit as its pool. Until
+the llama.cpp build is installed it is an estimate (two thirds of the memory up to 36 GiB, three quarters above,
+ESTIMATED); after that the launcher reads it from llama.cpp.
+
 ## Requirements
 
 - Python 3.9 or newer.
-- Docker Engine, with the NVIDIA Container Toolkit for NVIDIA GPUs. `ornith-launcher doctor` checks both.
-- Disk space for the model (from about 5 GiB for a 9B at Q4_K_M to hundreds of GiB for a 397B) plus 2 GiB, and a
-  few GB for the llama.cpp image.
+- Linux: Docker Engine, with the NVIDIA Container Toolkit for NVIDIA GPUs. `ornith-launcher doctor` checks both.
+- macOS: version 13.3 or newer. Apple Silicon runs the model on the GPU through Metal; an Intel Mac runs it on the
+  CPU only, so only small models are practical there. No Docker.
+- Disk space for the model (from about 5 GiB for a 9B at Q4_K_M to hundreds of GiB for a 397B) plus 2 GiB, and
+  the llama.cpp server: a few GB for the Docker image on Linux, about 12 MB on macOS.
 - Memory for the model and its context: from about 10.5 GiB for a 9B at Q4_K_M with a 32k context and vision off
   (ESTIMATED). On a small machine, open All models in setup and sort it by "memory needed, smallest first", or
   sort the best fit list by "best for small memory".
