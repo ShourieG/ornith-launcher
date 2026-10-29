@@ -113,8 +113,8 @@ Every command takes `-h`; all options are in the [guide](docs/GUIDE.md#commands-
 - [docs/HARDWARE.md](docs/HARDWARE.md): what was tested, and supported GPUs and Linux distributions
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md): every measurement, labelled TESTED, INFERRED or ESTIMATED
 - [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): when something goes wrong
-- [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [CREDITS.md](CREDITS.md),
-  [CHANGELOG.md](CHANGELOG.md), [docs/LEGAL.md](docs/LEGAL.md)
+- [CONTRIBUTING.md](https://github.com/ShourieG/ornith-launcher/blob/main/CONTRIBUTING.md),
+  [SECURITY.md](SECURITY.md), [CREDITS.md](CREDITS.md), [CHANGELOG.md](CHANGELOG.md), [docs/LEGAL.md](docs/LEGAL.md)
 
 ## Licence
 
