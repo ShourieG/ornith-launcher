@@ -6,6 +6,8 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-30
+
 The first release, for Linux and macOS. Windows support is planned for a later release.
 
 ### Added
@@ -37,8 +39,8 @@ The first release, for Linux and macOS. Windows support is planned for a later r
 - On Linux the server runs in Docker from a llama.cpp b11552 image pinned by digest (CUDA, ROCm, Vulkan, Intel
   or CPU). On macOS it runs the llama.cpp b11552 release build without Docker, pinned by sha256 and unpacked only
   after every archive entry is checked, with its official GitHub release address and a progress line shown while
-  it downloads, and `caffeinate` keeping the Mac awake. Servers listen on 127.0.0.1 only,
-  and llama.cpp's own memory check runs before the first launch.
+  it downloads, and `caffeinate` keeping the Mac awake. Servers listen on 127.0.0.1 only, and llama.cpp's own
+  memory check runs before the first launch.
 - A server window with the server's log and a status line, where Ctrl+C asks before stopping the server. An
   optional desktop icon and applications menu entry start a model with a double-click (`.desktop` files on Linux,
   marked trusted on GNOME; on macOS small apps built with `osacompile`, which open the chosen terminal directly
@@ -64,9 +66,9 @@ The first release, for Linux and macOS. Windows support is planned for a later r
   prints the fix for each problem it finds.
 - `uninstall` removes one setup or all setups (each with or without their models and the llama.cpp server),
   unfinished downloads, the coding tools setup installed (their own settings and history only if you ask), or
-  everything the launcher created. It removes only what the launcher recorded as its own, and
-  puts back OpenCode's previous default model unless you picked another one since. Each question starts on a
-  fresh screen, and after a removal setup waits for Enter before going back to its menu.
+  everything the launcher created. It removes only what the launcher recorded as its own, including a setup's
+  server log on macOS, and puts back OpenCode's previous default model unless you picked another one since. Each
+  question starts on a fresh screen, and after a removal setup waits for Enter before going back to its menu.
 - `bench`: a long-context retrieval test and llama.cpp perplexity, pausing when the GPU reaches 80 °C (Linux).
   `docs/BENCHMARKS.md` holds the DGX Spark results, each labelled TESTED, INFERRED or ESTIMATED.
 - Documentation: the README gives an overview, what has been tested and a quick start, and `docs/GUIDE.md`
@@ -74,5 +76,8 @@ The first release, for Linux and macOS. Windows support is planned for a later r
   quant and context against each other, with links to the published studies behind it.
 - A first-run disclaimer, shown again when its version changes; GPL-3.0-or-later licence with section 7 terms in
   `NOTICE` (keep the attribution, mark modified versions, no rights in the name); credits, security policy and
-  contributing guide (DCO sign-off). CI runs the unit tests on Linux and macOS with Python 3.9 and
-  the latest Python, plus ruff and shellcheck.
+  contributing guide (DCO sign-off). CI runs the unit tests on Linux and macOS with Python 3.9 and the latest
+  Python, plus ruff and shellcheck.
+
+[Unreleased]: https://github.com/ShourieG/ornith-launcher/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ShourieG/ornith-launcher/releases/tag/v0.1.0
