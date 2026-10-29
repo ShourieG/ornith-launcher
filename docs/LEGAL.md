@@ -1,7 +1,7 @@
 # Licences, responsibilities and trademarks
 
 This page is not legal advice. It records what ornith-launcher distributes, which licences apply to what it
-downloads, and the checks the owner completes before the repository goes public.
+downloads, and how the launcher handles responsibility and trademarks.
 
 ## What the project distributes
 
@@ -69,8 +69,7 @@ https://huggingface.co/terms-of-service):
 So the disclaimer says what matches those terms. The uploader is responsible for a model and for describing it
 accurately, the user is responsible for what they run, and the launcher's labelling is best effort with no
 warranty or liability (GPLv3 sections 15 and 16). The docs never say Hugging Face is liable for a model.
-Consumer law in some countries limits what a disclaimer can exclude; have a lawyer read `DISCLAIMER.md` if that
-matters before going public.
+Consumer law in some countries limits what a disclaimer can exclude.
 
 ## Trademarks
 
@@ -78,33 +77,3 @@ matters before going public.
 - Third-party names appear only to describe compatibility, for example "creates a profile for Claude Code".
 - The name ornith-launcher contains "Ornith", so it is always paired with "unofficial". If Ornith AI objects to
   the name, the project will be renamed.
-
-## Checklist before going public (the owner ticks each item)
-
-- [ ] `LICENSE` is the unmodified GPLv3 text (sha256 `3972dc97…6986`, from gnu.org), GitHub detects it as
-      GPL-3.0, and `NOTICE` says "or (at your option) any later version".
-- [ ] `NOTICE` lists the section 7 additional terms (attribution, marking modified versions, no rights in the
-      name), and `src/ornith_launcher/__init__.py` and the `ornith-launcher` script say where to find them.
-- [ ] `NOTICE` names "Copyright 2026 Shourie Ganguly", says the project is unofficial and not affiliated with the
-      companies named, and has the trademark sentence.
-- [ ] The README's first line and the repository description say "Unofficial".
-- [ ] `DISCLAIMER.md` covers every point in the design's section 13.3, and the app shows it on first run.
-- [ ] No model weights, chat-template copies, test corpus or other third-party text is in the repository or its
-      history. `ideate/` was never committed: `git log --all -- ideate` prints nothing.
-- [ ] No logos of Ornith AI, Anthropic, OpenCode or others anywhere (README, icons, shortcuts).
-- [ ] `CREDITS.md` names everyone the project builds on, with links and licences.
-- [ ] The Gemma 4 licence claim was checked against Google's own page, or reworded. (Google's Hugging Face
-      repositories declare Apache-2.0, checked 2026-10-29.)
-- [ ] Uncensored models need the typed confirmation, and `--yes` does not bypass it.
-- [ ] "Only uncensored models" needs the opt-in and shows the warning, and the disclaimer says the uncensored
-      label is a best-effort guess from names, tags and lineage.
-- [ ] The disclaimer (`DISCLAIMER.md` and `data/disclaimer.txt`) calls the labelling best effort, points to the
-      model cards, gives the issues link for unlabelled models, and does not call Hugging Face liable.
-- [ ] The app asks before installing anything or editing configs, and backs up edited files.
-- [ ] The Anthropic "not supported" sentence is quoted in the disclaimer and on the Claude Code option.
-- [ ] Every benchmark number carries TESTED, INFERRED or ESTIMATED.
-- [ ] The post to Ornith AI has been made, and any reply has been handled.
-- [ ] The macOS CI job is re-enabled in `.github/workflows/ci.yml` and green. (Windows is not part of the first
-      release.)
-- [ ] The launcher has run on a real Mac (setup, launch, the desktop icon, `bench`, uninstall), and the README,
-      `docs/HARDWARE.md` and the macOS notes say what was tested.

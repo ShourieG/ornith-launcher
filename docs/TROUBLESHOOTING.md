@@ -131,12 +131,15 @@ The launcher never runs `sudo` itself; it prints the command for you.
   terminal that was already open when OpenCode was installed does not see it either.
 - In OpenCode, pick the model with `/models`, then "Ornith (local, ornith-launcher)".
 - If your `opencode.json` has comments, the launcher shows the entry to paste instead of rewriting the file.
+- Files named `opencode.json.ornith-launcher-backup-DATE-TIME` (or `opencode.jsonc.…`) next to your config:
+  setup and uninstall keep a copy each time they change the file. They are never read again, so delete the old
+  ones once OpenCode works the way you want.
 
 ## Models found on the machine
 
 - The quick search reads only the usual folders (the Hugging Face cache, LM Studio, Ollama, the llama.cpp cache,
-  `~/models`, `~/Downloads`, the models folder and folders you entered). Use `./ornith-launcher setup --model
-  PATH` for anything else.
+  `~/models`, `~/Downloads` except on macOS, the models folder and folders you entered). Use
+  `./ornith-launcher setup --model PATH` for anything else.
 - A split model with missing parts is shown as incomplete and cannot be used.
 - The launcher never moves, copies or deletes a model it found; `remove` and `uninstall` leave it where it is.
 

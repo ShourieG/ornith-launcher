@@ -12,6 +12,7 @@ the tool is and how to get started.
 - [Using the model from other tools](#using-the-model-from-other-tools)
 - [Uninstalling](#uninstalling)
 - [Commands and options](#commands-and-options)
+- [Setup rules](#setup-rules)
 - [Files and settings](#files-and-settings)
 - [Linux](#linux)
 - [macOS](#macos)
@@ -35,7 +36,8 @@ will see along the way:
 
 ## Setup, step by step
 
-Setup runs as full-screen lists in a terminal, or as numbered menus with `--plain` (also used for pipes and SSH).
+Running `./ornith-launcher` with no command always opens setup; it never starts a server by itself. Setup runs as
+full-screen lists in a terminal, or as numbered menus with `--plain` (also used for pipes and SSH).
 Esc goes back a step at any point before the download and keeps your choices. Each question starts on a fresh
 screen; what came before stays in the terminal's scrollback.
 
@@ -173,6 +175,29 @@ them has been measured on Ornith, so read them as general guidance, not as Ornit
 | Choosing a quant for the 9B | Lean towards Q5_K_M or Q6_K: small models trained on a lot of text lose more to quantization (4) |
 | Using a coding agent | Keep 64k of context or more, and drop a quant step before dropping below 64k: the agent's own instructions fill much of a short context |
 | Reading long documents | Use the native 262k first; 524k and 1M (YaRN) only when a prompt really needs them, since they cost memory and prefill time (6, 7) |
+
+### Long contexts on Ornith
+
+Ornith models have a native context of 262k tokens. Setup also offers 32k to 128k for smaller machines, and 524k
+and 1M with YaRN (x2 and x4). Longer contexts cost memory and prefill time. These runs used Ornith 1.5 35B-A3B Q8_0
+on a DGX Spark:
+
+| Measure | Native 262k | 524k (YaRN x2) | 1M (YaRN x4) |
+|---|---|---|---|
+| Peak memory in use | 50.9 to 51.4 GiB | 56.6 to 57.4 GiB | 67.2 to 70.0 GiB |
+| Retrieval test, codes found | 2 of 2 at 240k tokens | 3 of 3 at 456k tokens | 6 of 6 at 917k tokens |
+| Cold prefill | 3.5 min to 240k tokens | 9.8 min to 456k tokens | 32.5 min to 917k tokens |
+
+Peak memory is TESTED and includes the 5 GiB or so the system used at idle. The retrieval results are TESTED for
+the uncensored community build at all three sizes and for the official build at 1M, and INFERRED for the official
+build at 262k and 524k. The prefill times are TESTED with the uncensored build; the official build took 35.5 min
+to 917k tokens. In the short-context perplexity test, YaRN x2 made no measurable difference and x4 cost at most
+0.4% (TESTED).
+
+The retrieval test is an easy one (exact codes hidden in a long document), so it says nothing about reasoning over
+long context. These are the only long-context runs so far; for other models and sizes the memory figures are
+ESTIMATED. YaRN is documented for Ornith 1.5 but not for 1.0, and setup notes this on 1.0 rows. Full results are in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 ### What the evidence says
 
@@ -465,6 +490,22 @@ Other commands:
 
 `bench` runs the GPU hot for a long time and, on Linux, pauses when it gets too hot. Results so far are in
 [BENCHMARKS.md](BENCHMARKS.md).
+
+## Setup rules
+
+- The server binds to `127.0.0.1` only, so other machines on your network cannot reach it.
+- Downloads are pinned and checked: the llama.cpp image by digest, the macOS llama.cpp build and model files by
+  sha256.
+- The launcher never runs `sudo`. When something needs root, such as adding you to the `docker` group, it prints
+  the command for you to run.
+- It asks before installing software, deleting files or changing another tool's config, and backs up a config
+  file before changing it. It prints PATH lines for you to add rather than editing your shell files.
+- It never moves, copies or deletes models that belong to other apps.
+- It sends no telemetry. It connects only to Hugging Face, ghcr.io for the llama.cpp image (Linux), the llama.cpp
+  releases on github.com (macOS) and, if you choose them, the official Claude Code and OpenCode installers.
+- Ctrl+C stops every long-running command cleanly, including the containers and processes it started.
+- Setup works from fixed rules: it reads each model's GGUF header, calculates the memory for this machine and
+  writes the llama.cpp command itself. No AI model, API key or account is involved.
 
 ## Files and settings
 

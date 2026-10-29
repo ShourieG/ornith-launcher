@@ -18,6 +18,16 @@ runs them; reports are welcome.
 | macOS 13.3 or newer, Apple Silicon | Native llama.cpp b11552 with Metal, no Docker | Tested on a MacBook Pro (M1 Max, 32 GB, macOS 26.6.2) |
 | macOS 13.3 or newer, Intel | Native llama.cpp b11552 on the CPU, no Docker | Built, not yet run on an Intel Mac |
 
+## What was run
+
+| Platform | Machine | What was run |
+|---|---|---|
+| Linux | NVIDIA DGX Spark (GB10, 128 GB unified memory, arm64), Ubuntu 24.04, Ornith 1.5 35B-A3B | Setup with a real download and resume, launching from the desktop icon, the chat log, Claude Code and OpenCode through it, `setup --shortcuts`, every uninstall choice, and Ctrl+C in `bench` |
+| macOS | MacBook Pro, Apple M1 Max, 32 GB, macOS 26.6.2, community Ornith 1.5 9B quants | Setup with real downloads, the llama.cpp runtime download, the launch icon app opening iTerm2 windows, installing OpenCode, uninstall, and the Metal memory limit the launcher reads |
+
+Not run yet: other Linux distributions, discrete NVIDIA, AMD and Intel GPUs, CPU-only machines, Intel Macs,
+`bench` on a Mac, and every other model and size. The unit tests run on Linux and macOS in CI.
+
 ## Linux distributions
 
 The launcher calls no package manager and has little distribution-specific code, so any distribution with

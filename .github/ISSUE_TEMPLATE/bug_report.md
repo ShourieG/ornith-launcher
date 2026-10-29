@@ -22,5 +22,5 @@ labels: bug
 - GPU and driver version (Linux):
 - Memory (RAM, or unified memory):
 - Python version (`python3 --version`):
-- Terminal app (for example GNOME Terminal or Konsole):
+- Terminal app (for example GNOME Terminal, Konsole, Terminal or iTerm2):
 - Docker version, Linux only (`docker --version`):
