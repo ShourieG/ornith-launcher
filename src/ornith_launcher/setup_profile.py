@@ -15,6 +15,8 @@ from ornith_launcher.installed import downloaded_here, record
 from ornith_launcher.integrations import opencode, tool_windows
 from ornith_launcher.integrations import setup as integrations
 from ornith_launcher.integrations.shortcuts import (
+    app_name,
+    applet_lines,
     command_file,
     command_file_name,
     desktop_dir,
@@ -23,6 +25,7 @@ from ornith_launcher.integrations.shortcuts import (
     shortcut_name,
     shortcut_path,
     user_dirs_file,
+    write_mac_app,
     write_shortcut,
 )
 from ornith_launcher.integrations.terminals import THIS_TERMINAL, detect_terminals
@@ -199,7 +202,7 @@ def offer_chat_log(app: App, prompter: PlainPrompter, plan: Plan, profile: Profi
     """A second window with requests and replies at every launch (default no); saved."""
     if plan.report.platform.headless or chat_log.log_terminal(app, profile) is None:
         return
-    app.say()
+    prompter.new_screen("Chat log")
     prompter.paragraph(
         "A chat log window shows each request sent to this model and its reply as it "
         "streams: what you or your coding tool sent, the model's thinking, its answer and "
@@ -220,13 +223,13 @@ def offer_shortcut(app: App, prompter: PlainPrompter, plan: Plan, profile: Profi
 def ask_shortcuts(app: App, prompter: PlainPrompter, profile: Profile) -> None:
     """The two questions, skipping whatever the profile already has.
 
-    Linux gets ``.desktop`` entries; macOS gets ``.command`` files, which Finder opens
-    in Terminal, on the desktop and in ``~/Applications``.
+    Linux gets ``.desktop`` entries; macOS gets an app on the desktop and in
+    ``~/Applications`` (a ``.command`` file if ``osacompile`` cannot build one).
     """
     mac = app.os_name == "darwin"
     if mac:
-        entry = command_file(profile.name, self_command())
-        name = command_file_name(profile.name)
+        entry = ""  # built by osacompile instead, in write()
+        name = app_name(profile.name)
         menu = "your Applications folder (~/Applications)"
     else:
         comment = f"Start Ornith ({profile.name}) with ornith-launcher (unofficial)"
@@ -240,19 +243,34 @@ def ask_shortcuts(app: App, prompter: PlainPrompter, profile: Profile) -> None:
         )
         name = shortcut_name(profile.name)
         menu = "your applications menu"
+
+    def write(path: Path) -> Path:
+        """Write the launcher; on macOS the app, or a .command file when it cannot be built."""
+        if not mac:
+            write_shortcut(path, entry)
+            return path
+        lines = applet_lines(profile.name, self_command(), app.env.get("PATH", ""))
+        if write_mac_app(app.host, path, lines):
+            return path
+        path = path.with_name(command_file_name(profile.name))
+        write_shortcut(path, command_file(profile.name, self_command()))
+        app.say("  osacompile could not build an app, so this is a .command file instead.")
+        return path
+
     desktop = desktop_dir(app.host.read_text(str(user_dirs_file(app.env, app.home))), app.home)
     # A profile set up earlier may have one already; only the missing one is asked about.
     on_desktop = _has_file(profile, "desktop_copy")
+    if not (on_desktop and _has_file(profile, "shortcut")):
+        prompter.new_screen("Launch icon")
     if not on_desktop and desktop is not None and desktop.is_dir():
         if prompter.confirm("Put a launch icon for this model on your desktop?", default=True):
-            path = desktop / name
-            write_shortcut(path, entry)
+            path = write(desktop / name)
             record(app.paths, "shortcuts", str(path))
             profile.integrations["desktop_copy"] = str(path)
             on_desktop = True
             app.say(f"  Created {path}.")
             if mac:
-                app.say("  If macOS asks before opening it the first time, choose Open.")
+                _mac_first_open_note(app, profile, path)
             elif not _trust_launcher(app, path):
                 app.say(
                     '  If the icon says "Allow Launching", right-click it and choose that once.'
@@ -264,12 +282,12 @@ def ask_shortcuts(app: App, prompter: PlainPrompter, profile: Profile) -> None:
     )
     if prompter.confirm(question, default=False):
         if mac:
-            path = mac_applications_dir(app.home) / name
-            note = "Find it there in Finder, or with Spotlight."
+            mac_applications_dir(app.home).mkdir(exist_ok=True)
+            path = write(mac_applications_dir(app.home) / name)
+            note = "Find it there in Finder, Launchpad or Spotlight."
         else:
-            path = shortcut_path(profile.name, app.env, app.home)
+            path = write(shortcut_path(profile.name, app.env, app.home))
             note = "It appears in your applications menu."
-        write_shortcut(path, entry)
         record(app.paths, "shortcuts", str(path))
         profile.integrations["shortcut"] = str(path)
         app.say(f"  Created {path}. {note}")
@@ -277,7 +295,17 @@ def ask_shortcuts(app: App, prompter: PlainPrompter, profile: Profile) -> None:
 
 def _has_file(profile: Profile, key: str) -> bool:
     path = profile.integrations.get(key)
-    return bool(path) and Path(path).is_file()
+    return bool(path) and Path(path).exists()  # a macOS app is a folder
+
+
+def _mac_first_open_note(app: App, profile: Profile, path: Path) -> None:
+    if path.suffix == ".command":
+        app.say("  If macOS asks before opening it the first time, choose Open.")
+    elif profile.terminal.get("id") == "iterm2":
+        app.say(
+            "  The first time it opens iTerm2, macOS asks whether it may control iTerm2; "
+            "choose Allow."
+        )
 
 
 def _trust_launcher(app: App, path: Path) -> bool:
@@ -341,6 +369,16 @@ def finish_setup(
 
 def launch_now(app: App, prompter: PlainPrompter, profile: Profile) -> int:
     if not prompter.confirm("Launch now?", default=False):
+        # Setup ends on a clear screen with how to start the model; its steps stay in the
+        # scrollback.
+        lines = [
+            prompter.bold(f"Saved the profile {profile.name}."),
+            f"Start it any time with: ornith-launcher launch {profile.name}",
+        ]
+        icon = profile.integrations.get("desktop_copy")
+        if icon:
+            lines.append(f"Or double-click its launch icon: {icon}")
+        prompter.quit_screen(lines)
         return 0
     if _hop_to_terminal(app, profile):
         return 0

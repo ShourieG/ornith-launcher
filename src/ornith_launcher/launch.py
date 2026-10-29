@@ -279,6 +279,8 @@ class Launcher:
             if terminal is not None and open_in_terminal(self.app.host, terminal, argv, title):
                 self.say(f"Opened {name} in a separate {terminal.name} window, in {folder}.")
                 continue
+            if terminal is not None and terminal.failure_hint:
+                self.say(terminal.failure_hint)
             self.say(f"Start {name} in another terminal with: {argv[2]}")
 
     def print_ready(self, profile: Profile) -> None:
@@ -366,6 +368,11 @@ def prompter_for(app: App, assume_yes: bool = False) -> PlainPrompter:
 def add_launch_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("name", nargs="?", help="profile name (default: the default profile)")
     parser.add_argument("--here", action="store_true", help="run in this terminal")
+    parser.add_argument(
+        "--window",
+        action="store_true",
+        help="open the server in a terminal window and return (used by the macOS app)",
+    )
     parser.add_argument("--no-monitor", action="store_true", help="start the server and return")
     chat = parser.add_mutually_exclusive_group()
     chat.add_argument(
@@ -401,6 +408,14 @@ def run_launch(app: App, args: argparse.Namespace) -> int:
         raise LaunchError(f"{name} cannot start until the problems above are fixed")
     chat = getattr(args, "chat_log", None)
     tools = not getattr(args, "no_tools", False)
+    if getattr(args, "window", False):
+        # From the macOS app: no terminal here to run in, so a window or an error.
+        if not _hop_to_terminal(app, profile, chat, tools, window=True):
+            raise LaunchError(
+                f"no terminal window could be opened for {name}",
+                hint=f"Start it from a terminal with: ornith-launcher launch {name}",
+            )
+        return 0
     if not args.here and _hop_to_terminal(app, profile, chat, tools):
         return 0  # the new window asks about the image, where there is someone to answer
     fetch_image(app, runtime, profile, prompter)
@@ -425,16 +440,27 @@ def fetch_image(app: App, runtime: Runtime, profile: Profile, prompter: PlainPro
 
 
 def _hop_to_terminal(
-    app: App, profile: Profile, chat: bool | None = None, tools: bool = True
+    app: App,
+    profile: Profile,
+    chat: bool | None = None,
+    tools: bool = True,
+    window: bool = False,
 ) -> bool:
-    """Open the chosen terminal and run there, unless this already is that terminal."""
+    """Open the chosen terminal and run there, unless this already is that terminal.
+
+    ``window``: always open one (the macOS app has no terminal of its own), using the
+    system's default terminal for a profile set to run in "this terminal".
+    """
     terminal_id = profile.terminal.get("id") or THIS_TERMINAL
-    if terminal_id == THIS_TERMINAL:
+    if terminal_id == THIS_TERMINAL and not window:
         return False
     interactive = getattr(app.out, "isatty", lambda: False)()
-    if interactive and runs_in(terminal_id, app.env):
+    if not window and interactive and runs_in(terminal_id, app.env):
         return False
-    terminal = by_id(terminal_id, detect_terminals(app.host, app.os_name))
+    terminals = detect_terminals(app.host, app.os_name)
+    terminal = terminals.default if terminal_id == THIS_TERMINAL else by_id(terminal_id, terminals)
+    if terminal is None and window:
+        terminal = terminals.default  # the chosen one is gone; the system's one still works
     if terminal is None:
         app.say(f"The terminal {terminal_id} is no longer installed; running here instead.")
         return False
@@ -446,7 +472,9 @@ def _hop_to_terminal(
     if open_in_terminal(app.host, terminal, command, f"Ornith: {profile.name}"):
         app.say(f"Opened {profile.name} in {terminal.name}.")
         return True
-    app.say(f"Could not open {terminal.name}; running here instead.")
+    app.say(f"Could not open {terminal.name}" + ("." if window else "; running here instead."))
+    if terminal.failure_hint:
+        app.say(terminal.failure_hint)
     return False
 
 

@@ -17,6 +17,7 @@ from unittest import mock
 from ornith_launcher.app import App
 from ornith_launcher.catalog.gguf import ValueType
 from ornith_launcher.config import resolve_paths
+from ornith_launcher.installed import load_installed
 from ornith_launcher.integrations import claude_code, installers, opencode
 from ornith_launcher.integrations import setup as integrations
 from ornith_launcher.system.host import CommandResult
@@ -394,7 +395,9 @@ class ConfigureTest(unittest.TestCase):
         self.assertEqual(self.profile.integrations["opencode"]["previous_model"], "lmstudio/gemma")
         opencode.remove_entry(self.app, self.profile)
         self.assertEqual(json.loads(self.opencode_file.read_text())["model"], "lmstudio/gemma")
-        self.assertIn("default model is lmstudio/gemma again", self.out.getvalue())
+        # Indented like the other lines uninstall prints for what it removed.
+        self.assertIn("\n  OpenCode's default model is lmstudio/gemma again.", self.out.getvalue())
+        self.assertIn("\n  Removed ornith-1.5-35b-q8_0 from ", self.out.getvalue())
 
     def test_opencode_gets_the_picture_instructions_without_asking(self):
         integrations.configure(
@@ -410,6 +413,22 @@ class ConfigureTest(unittest.TestCase):
         self.assertIn("system prompt of every session, for every model", said)
         opencode.remove_entry(self.app, self.profile)
         self.assertNotIn("instructions", json.loads(self.opencode_file.read_text()))
+
+    def test_the_tools_screen_lists_each_tool_and_spaces_its_notes(self):
+        del self.host.programs["opencode"]
+        integrations.choose(self.app, self.prompter(""))
+        text = self.out.getvalue()
+        self.assertIn("  Claude Code  installed\n  OpenCode     not installed\n\n", text)
+        self.assertIn("the model file is not changed.\n\n  OpenCode also gets", text)
+        self.assertIn("with the last Ornith model.\n\n  Note: ", text)
+
+    def test_the_tool_names_are_bold_where_the_terminal_shows_it(self):
+        prompter = self.prompter("")
+        prompter.bold = lambda text: f"\x1b[1m{text}\x1b[0m"
+        integrations.choose(self.app, prompter)
+        text = self.out.getvalue()
+        self.assertIn("  \x1b[1mClaude Code\x1b[0m  installed", text)
+        self.assertIn("  \x1b[1mOpenCode\x1b[0m also gets picture instructions", text)
 
     def test_claude_code_is_the_suggested_choice(self):
         self.assertEqual(integrations.choose(self.app, self.prompter("")), integrations.CLAUDE_ONLY)
@@ -433,6 +452,7 @@ class ConfigureTest(unittest.TestCase):
         self.assertNotIn("claude_code", self.profile.integrations)
         self.assertIn("curl -fsSL https://claude.ai/install.sh | bash", self.out.getvalue())
         self.assertEqual(self.host.live, [])
+        self.assertEqual(load_installed(self.app.paths).tools, [])  # declined: nothing recorded
 
         def installer_puts_claude(argv):
             self.host.programs["claude"] = "/usr/bin/claude"
@@ -445,6 +465,90 @@ class ConfigureTest(unittest.TestCase):
                 self.app, self.prompter("y"), self.profile, integrations.CLAUDE_ONLY
             )
         self.assertIn("claude_code", self.profile.integrations)
+        # Its installer is silent while it downloads, so the wait is announced.
+        note = "Installing Claude Code. Its installer shows nothing while it downloads"
+        self.assertIn(note, self.out.getvalue())
+        self.assertEqual(self.host.waiting, "The Claude Code installer is still working.")
+        # Recorded, so uninstall can offer it; the questions go on on a fresh screen.
+        self.assertEqual(load_installed(self.app.paths).tools, ["claude"])
+        fresh = "Setting up Claude Code\n\nInstalled Claude Code: /usr/bin/claude"
+        self.assertIn(fresh, self.out.getvalue())
+        said = " ".join(self.out.getvalue().split())
+        self.assertIn("Claude Code is a command-line app: type claude in a new", said)
+
+    def install_opencode(self, found_by_new_window: bool):
+        """OpenCode installed from a terminal whose PATH still has its folder from before."""
+        del self.host.programs["opencode"]
+        folder = self.home / ".opencode" / "bin"
+        self.host.env.update(PATH=f"{folder}:/usr/bin", SHELL="/bin/zsh")
+        binary = str(folder / "opencode")
+
+        self.shown = []
+
+        def installer_puts_opencode(argv, waiting):
+            self.shown.append(tuple(argv))
+            self.host.programs["opencode"] = binary
+            return 0
+
+        self.host.run_shown = installer_puts_opencode
+        self.host.programs["env"] = "/usr/bin/env"
+        self.host.commands[(binary, "--version")] = CommandResult(0, "1.19\n", "")
+        bare = ("env", "-i", f"HOME={self.home}", "SHELL=/bin/zsh", "TERM=dumb")
+        check = (*bare, "PATH=/usr/bin:/bin", "/bin/zsh", "-lic", "command -v opencode")
+        found = CommandResult(0, f"welcome\n{binary}\n", "")
+        self.host.commands[check] = found if found_by_new_window else CommandResult(1, "", "")
+        with mock.patch.object(installers, "fetch_script", return_value=b"echo install\n"):
+            # install, then decline the default-model question
+            integrations.configure(
+                self.app, self.prompter("y", "n"), self.profile, integrations.OPENCODE_ONLY
+            )
+        return folder
+
+    def test_opencode_installs_its_path_line_even_from_a_terminal_that_had_it(self):
+        self.install_opencode(found_by_new_window=True)
+        # Its installer writes the PATH line only when PATH lacks the folder, so it runs
+        # without it (an earlier uninstall removed the line, not this terminal's copy).
+        self.assertEqual(self.shown[0][:3], ("env", "PATH=/usr/bin", "bash"))
+        self.assertIn("opencode", self.profile.integrations)
+        text = self.out.getvalue()
+        self.assertIn("OpenCode (the opencode command-line app) is not installed.", text)
+        self.assertNotIn("would not find", text)
+
+    def test_a_command_a_new_window_cannot_find_gets_the_path_line(self):
+        self.install_opencode(found_by_new_window=False)
+        text = self.out.getvalue()
+        self.assertIn("A new terminal window would not find opencode: ", text)
+        line = "echo 'export PATH=\"$HOME/.opencode/bin:$PATH\"' >> ~/.zshrc"
+        self.assertIn(f"To add it: {line}", text)
+
+    def test_bash_on_linux_counts_the_login_files_too(self):
+        # Ubuntu adds ~/.local/bin in ~/.profile, which bash -i alone does not read.
+        self.host.programs["env"] = "/usr/bin/env"
+        bare = ("env", "-i", f"HOME={self.home}", "SHELL=/bin/bash", "TERM=dumb")
+        bare = (*bare, "PATH=/usr/bin:/bin")
+        login = (*bare, "/bin/bash", "-lic", "command -v claude")
+        rc_only = (*bare, "/bin/bash", "-ic", "command -v claude")
+        self.host.commands[login] = CommandResult(0, f"{self.home}/.local/bin/claude\n", "")
+        self.host.commands[rc_only] = CommandResult(1, "", "")
+        finds = installers.new_window_finds
+        self.assertTrue(finds(self.host, self.home, "/bin/bash", "linux", "claude"))
+        # Found by neither: a real "no", so setup prints the PATH line.
+        self.host.commands[login] = CommandResult(1, "", "")
+        self.assertFalse(finds(self.host, self.home, "/bin/bash", "linux", "claude"))
+        # Only ~/.bashrc has it (OpenCode's installer writes there): still found.
+        self.host.commands[rc_only] = CommandResult(0, f"{self.home}/.opencode/bin/claude\n", "")
+        self.assertTrue(finds(self.host, self.home, "/bin/bash", "linux", "claude"))
+
+    def test_path_helpers(self):
+        folder = self.home / ".opencode" / "bin"
+        path = os.pathsep.join([str(folder), "/usr/bin", "", "/bin"])
+        kept = os.pathsep.join(["/usr/bin", "/bin"])
+        self.assertEqual(installers.without_dir(path, folder), kept)
+        line = installers.path_line(self.home, "/bin/bash", "darwin", folder)
+        expected = "echo 'export PATH=\"$HOME/.opencode/bin:$PATH\"' >> ~/.bash_profile"
+        self.assertEqual(line, expected)
+        finds = installers.new_window_finds
+        self.assertIsNone(finds(self.host, self.home, "/usr/bin/fish", "linux", "x"))
 
 
 if __name__ == "__main__":

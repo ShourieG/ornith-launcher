@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Sequence
 
 GIB = 1024**3
+_STYLE = re.compile(r"\x1b\[[0-9;]*m")  # bold, reverse and colour codes take no columns
 
 
 def gib(value: int | float) -> str:
@@ -24,8 +26,23 @@ def _char_width(ch: str) -> int:
 
 
 def text_width(text: str) -> int:
-    """Terminal columns ``text`` takes: wide (CJK) characters take two, combining ones none."""
-    return sum(_char_width(ch) for ch in text)
+    """Terminal columns ``text`` takes: wide (CJK) characters take two, combining ones and
+    colour or bold codes none."""
+    return sum(_char_width(ch) for ch in _STYLE.sub("", text))
+
+
+def wrap_styled(text: str, width: int, indent: str = "") -> list[str]:
+    """Greedy word wrap that counts columns as ``text_width`` does, so bold or colour codes
+    take no room (``textwrap`` counts them as characters and wraps too early)."""
+    lines: list[str] = []
+    line = ""
+    for word in text.split():
+        candidate = f"{line} {word}" if line else f"{indent}{word}"
+        if line and text_width(candidate) > width:
+            lines.append(line)
+            candidate = f"{indent}{word}"
+        line = candidate
+    return [*lines, line] if line else lines
 
 
 def pad(text: str, width: int) -> str:

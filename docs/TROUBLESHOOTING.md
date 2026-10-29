@@ -53,6 +53,9 @@ The launcher never runs `sudo` itself; it prints the command for you.
   `/v1/messages`). Other requests pass through without showing.
 - SELinux hosts (Fedora, RHEL) block bind mounts; the launcher runs its container with `label=disable` and never
   relabels your files.
+- Claude Code or OpenCode opens at every launch and you do not want it: run `./ornith-launcher setup
+  --integrations NAME` and answer no to "Open … when this model starts?", or skip it once with
+  `./ornith-launcher launch NAME --no-tools`.
 
 ## macOS
 
@@ -62,13 +65,22 @@ The launcher never runs `sudo` itself; it prints the command for you.
   at Q4_K_M with a short context.
 - The server does not start and `./ornith-launcher doctor` says macOS marked the files as downloaded from the
   internet: run the `xattr -dr` command doctor prints. The files' sha256 was checked when they were downloaded.
-- Finder asks before opening `Ornith NAME.command` the first time: choose Open. It does not ask again.
+- The "Ornith NAME" app shows "could not start" with a reason: follow the fix in the message. If it says no
+  terminal window could be opened and your terminal is iTerm2, allow the app to control iTerm2 in System Settings
+  > Privacy & Security > Automation.
+- Finder asks before opening `Ornith NAME.command` (made when `osacompile` could not build the app) the first
+  time: choose Open. It does not ask again.
+- Uninstall moves the "Ornith NAME" app to the Trash instead of deleting it, after macOS asks to let your terminal
+  control Finder: once an app has run, macOS's App Management stops a terminal from deleting the files inside it,
+  but Finder may. If you refused, uninstall names the app and leaves it; drag it to the Trash yourself, or allow
+  your terminal in System Settings > Privacy & Security > App Management.
 - `ornith-claude` is not found after setup: `~/.local/bin` is not on your PATH. Setup prints the line to add to
   `~/.zprofile`; open a new Terminal window after adding it.
 - A model in `~/Downloads` is not found: the quick search skips that folder on macOS, because macOS asks before an
   app reads it. Give its path with `p` in setup, or `./ornith-launcher setup --model PATH`.
 - Setup plans against the GPU memory limit Metal sets, not the whole memory, so a model can be "too big" on a Mac
-  that has enough memory in total. The launcher never changes that limit.
+  that has enough memory in total. On a 32 GB M1 Max, Metal allowed 24.96 GiB. The launcher never changes that
+  limit.
 - The server window shows no GPU temperature: macOS reports it only to root, so `bench` cannot pause for heat
   either.
 
@@ -88,7 +100,10 @@ The launcher never runs `sudo` itself; it prints the command for you.
 
 - The menu only lists what applies: the setup options once a setup exists, and Remove unfinished downloads while a
   stopped download is left. That option deletes only the stopped downloads (all of them, or the one you pick).
-- The model server (llama.cpp image) is only offered when ornith-launcher pulled it and no other setup needs it.
+- Remove all setups offers the setups alone, with their models, with their models and llama.cpp, or Everything.
+  Remove everything has its own row in the Uninstall menu only once no setup is left.
+- The model server (the llama.cpp image on Linux, the runtime folder on macOS) is only offered when
+  ornith-launcher fetched it and no other setup needs it.
 - If the image has other tags, uninstall removes only the launcher's reference, and the image stays for the others.
 
 ## Claude Code
@@ -110,6 +125,10 @@ The launcher never runs `sudo` itself; it prints the command for you.
 
 ## OpenCode
 
+- `opencode: command not found` in a new terminal window after setup installed it: its folder,
+  `~/.opencode/bin`, is not on your PATH. Setup checks this after installing and prints the line to add; on zsh
+  it is `echo 'export PATH="$HOME/.opencode/bin:$PATH"' >> ~/.zshrc`. Open a new window after adding it. A
+  terminal that was already open when OpenCode was installed does not see it either.
 - In OpenCode, pick the model with `/models`, then "Ornith (local, ornith-launcher)".
 - If your `opencode.json` has comments, the launcher shows the entry to paste instead of rewriting the file.
 
@@ -129,3 +148,8 @@ was stopped, and `r` (Resume a download) lists it with how much is done and carr
 folder and with the settings you chose before. If those settings no longer fit the machine, setup asks for them
 again. To delete it later, choose `u` (Uninstall), then Remove unfinished downloads. A file that fails its sha256
 check is removed and downloaded again on the next run.
+
+A download that sits at 0% for about 10 seconds and then starts: one of the server's addresses did not answer,
+and the launcher moved on to the next one; it tries that address last for the rest of the download. An installer
+for Claude Code or OpenCode can sit silent for longer, since it downloads from GitHub with its own tools; setup
+shows a spinner with the time so far while it waits.

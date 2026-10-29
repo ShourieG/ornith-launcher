@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import unittest
 
 from ornith_launcher.catalog.catalog import entries
@@ -266,6 +267,12 @@ class CandidateTest(unittest.TestCase):
         busy = [Pool(PoolKind.UNIFIED, "Unified", int(121.7 * GIB), int(5.3 * GIB), 50 * GIB)]
         self.assertIs(q4_122b(busy)[65536].fit, Fit.STRETCH)
         self.assertIn("close other apps", q4_122b(busy)[65536].fit_reason)
+        # In the reserve and short of free memory: a Mac also says how much to free.
+        self.assertNotIn("close other apps", q4_122b(busy)[1048576].fit_reason)
+        mac = [dataclasses.replace(busy[0], apps_hint=True)]
+        reason = q4_122b(mac)[1048576].fit_reason
+        self.assertIn("into the 15% of Unified kept free", reason)
+        self.assertRegex(reason, r"only 50.0 GiB is free right now: close other apps to free ")
         # More than the machine has at all: too big.
         small = q4_122b(MACHINES["laptop"])
         self.assertIs(small[65536].fit, Fit.TOO_BIG)

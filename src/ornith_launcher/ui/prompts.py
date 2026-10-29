@@ -14,7 +14,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TextIO
 
-from ornith_launcher.ui.plain import clean_cell, clip, column_widths, table_line, text_width
+from ornith_launcher.ui.plain import (
+    clean_cell,
+    clip,
+    column_widths,
+    table_line,
+    text_width,
+    wrap_styled,
+)
 
 # After a yes/no question, naming the answer Enter gives.
 YES_HINT = "[Y/n] (default: yes)"
@@ -109,7 +116,7 @@ class PlainPrompter:
     # them. Every question gets a blank line before it, so callers never print one.
 
     def confirm(self, question: str, default: bool = True, back: bool = False) -> bool | None:
-        """Yes or no. Esc answers no, or with ``back`` returns None so the caller can go back."""
+        """Yes or no, the question in bold. Esc answers no, or with ``back`` returns None."""
         if self.assume_yes:
             return default
         self.say()
@@ -117,7 +124,7 @@ class PlainPrompter:
         if back:
             hint = f"{hint[:-1]}; {shown_key(BACK)} to go back)"
         while True:
-            answer = self._line(f"{question} {hint} ")
+            answer = self._line(f"{self.bold(question)} {hint} ")
             if answer is None:
                 return None if back else False
             answer = answer.lower()
@@ -128,6 +135,13 @@ class PlainPrompter:
             if answer in ("n", "no"):
                 return False
             self.say("Please answer y or n.")
+
+    def pause(self, message: str) -> None:
+        """Wait for Enter (or Esc) so the lines above can be read before the screen changes."""
+        if self.assume_yes:
+            return
+        self.say()
+        self._line(message)
 
     def text(self, question: str, default: str = "", back: bool = False) -> str:
         """A typed answer, or ``default`` for Enter alone.
@@ -175,8 +189,11 @@ class PlainPrompter:
         """A block of text, wrapped to the terminal when there is one (logs keep one line)."""
         if self._is_tty():
             width = min(shutil.get_terminal_size((100, 30)).columns, 100) - 2
+            width = max(40, width)
             text = "\n".join(
-                textwrap.fill(line, max(40, width), initial_indent=indent, subsequent_indent=indent)
+                "\n".join(wrap_styled(line, width, indent))
+                if text_width(line) != len(line)  # style codes: textwrap would count them
+                else textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent)
                 for line in text.split("\n")
             )
         else:

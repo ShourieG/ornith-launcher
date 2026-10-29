@@ -7,7 +7,7 @@ downloads, and the checks the owner completes before the repository goes public.
 
 | Item | Distributed by this project? | Licence |
 |---|---|---|
-| Our code, docs, benchmark data, the catalog of Hugging Face metadata | Yes | Apache-2.0 |
+| Our code, docs, benchmark data, the catalog of Hugging Face metadata | Yes | GPL-3.0-or-later |
 | Model weights (GGUF files) | No. Users download them from Hugging Face | Each model's own licence |
 | Chat templates | No copies. The project ships transformation rules and hashes | Not applicable (the rules are our code) |
 | llama.cpp | No. On Linux the user's machine pulls the Docker image from ghcr.io; on macOS it downloads the release build from GitHub | MIT (ggml.org) |
@@ -68,7 +68,7 @@ https://huggingface.co/terms-of-service):
 
 So the disclaimer says what matches those terms. The uploader is responsible for a model and for describing it
 accurately, the user is responsible for what they run, and the launcher's labelling is best effort with no
-warranty or liability (Apache-2.0 sections 7 and 8). The docs never say Hugging Face is liable for a model.
+warranty or liability (GPLv3 sections 15 and 16). The docs never say Hugging Face is liable for a model.
 Consumer law in some countries limits what a disclaimer can exclude; have a lawyer read `DISCLAIMER.md` if that
 matters before going public.
 
@@ -81,7 +81,10 @@ matters before going public.
 
 ## Checklist before going public (the owner ticks each item)
 
-- [ ] `LICENSE` is the unmodified Apache-2.0 text, and GitHub detects it as Apache-2.0.
+- [ ] `LICENSE` is the unmodified GPLv3 text (sha256 `3972dc97…6986`, from gnu.org), GitHub detects it as
+      GPL-3.0, and `NOTICE` says "or (at your option) any later version".
+- [ ] `NOTICE` lists the section 7 additional terms (attribution, marking modified versions, no rights in the
+      name), and `src/ornith_launcher/__init__.py` and the `ornith-launcher` script say where to find them.
 - [ ] `NOTICE` names "Copyright 2026 Shourie Ganguly", says the project is unofficial and not affiliated with the
       companies named, and has the trademark sentence.
 - [ ] The README's first line and the repository description say "Unofficial".

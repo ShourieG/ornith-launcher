@@ -65,13 +65,13 @@ def in_folder(command: list[str], path: Path) -> list[str]:
 
 
 def offer(app: App, prompter: PlainPrompter, profile: Profile, headless: bool) -> None:
-    """Ask which connected tools open with the model (default none), and where."""
+    """Ask which connected tools open with the model (default all of them), and where."""
     tools = connected(profile)
     if headless or not tools:
         profile.terminal.pop("open_tools", None)
         profile.terminal.pop("tools_folder", None)
         return
-    app.say()
+    prompter.new_screen("Coding tools at launch")
     names = " and ".join(NAMES[t] for t in tools)
     prompter.paragraph(
         f"Each launch can also open {names} in its own window, connected to this model, once "
@@ -81,7 +81,7 @@ def offer(app: App, prompter: PlainPrompter, profile: Profile, headless: bool) -
     if len(tools) == 1:
         picked = (
             tools
-            if prompter.confirm(f"Open {NAMES[tools[0]]} when this model starts?", default=False)
+            if prompter.confirm(f"Open {NAMES[tools[0]]} when this model starts?", default=True)
             else []
         )
     else:
@@ -91,7 +91,7 @@ def offer(app: App, prompter: PlainPrompter, profile: Profile, headless: bool) -
             "Open a coding tool when this model starts?",
             ["Tool"],
             [Choice((label,)) for label in labels],
-            default=0,
+            default=3,
         )
         picked = options[int(answer)]
     if not picked:

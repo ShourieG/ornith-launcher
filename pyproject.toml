@@ -7,7 +7,7 @@ name = "ornith-launcher"
 description = "Unofficial launcher for running Ornith models locally with llama.cpp"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Shourie Ganguly" }]
 dependencies = []

@@ -185,7 +185,8 @@ def _check_macos(
     devices = macos.list_devices(host, server)
     memory = macos.detect_memory(host)
     gpus = tuple(macos.detect_gpus(host, platform.arch, devices))
-    pools = macos.build_pools(memory, gpus, devices) if memory is not None else ()
+    working_set = host.metal_working_set() if gpus else None
+    pools = macos.build_pools(memory, gpus, devices, working_set) if memory is not None else ()
     problems = find_macos_problems(platform, memory, gpus, native, macos.macos_version(host))
     python = ".".join(str(part) for part in sys.version_info[:3])
     docker = DockerStatus(installed=False)  # not used on macOS
@@ -237,12 +238,4 @@ def find_macos_problems(
                 "Continue to use the CPU, or use an Apple Silicon Mac.",
             )
         )
-    problems.append(
-        Problem(
-            Severity.WARNING,
-            "macOS support is new and has not been tested on a Mac by the project yet.",
-            "Continue; please report problems at "
-            "https://github.com/ShourieG/ornith-launcher/issues",
-        )
-    )
     return tuple(problems)

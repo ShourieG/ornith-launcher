@@ -2,13 +2,15 @@
 
 macOS has no ``/proc``, so memory comes from ``sysctl`` and ``vm_stat``. Apple
 Silicon shares its memory between the CPU and the GPU, but Metal lets the GPU use
-only part of it (the working-set limit). The planner sizes the unified pool from
-that limit, read from the native ``llama-server --list-devices`` once the runtime
-is installed, and estimated from the total before that.
+only part of it (the working-set limit). The unified pool is all of memory, less what
+the system uses, capped at that limit. The limit is asked of Metal itself through
+``ctypes``; failing that, read from the native ``llama-server --list-devices`` once the
+runtime is installed, and estimated from the total as a last resort.
 """
 
 from __future__ import annotations
 
+import ctypes
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -22,8 +24,14 @@ MIB = 1024**2
 GIB = 1024**3
 MIN_VERSION = (13, 3)  # the pinned llama.cpp build needs macOS 13.3 (its LC_BUILD_VERSION)
 # Without a reading from Metal: the share of memory macOS is reported to give the GPU
-# (about two thirds up to 36 GiB, three quarters above). ESTIMATED until checked on a Mac.
+# (about two thirds up to 36 GiB, three quarters above). ESTIMATED: a 32 GiB M1 Max on
+# macOS 26 reported 78%, so this is only a fallback.
 SMALL_MAC = 36 * GIB
+# The recommended context leaves this much beyond the 15% reserve, as the estimates are
+# not measured on a Mac yet.
+RECOMMEND_MARGIN = GIB
+_METAL = "/System/Library/Frameworks/Metal.framework/Metal"
+_OBJC = "/usr/lib/libobjc.A.dylib"
 _PAGE_SIZE = re.compile(r"page size of (\d+) bytes")
 _DEVICE = re.compile(r"^\s*(\S+): (.+) \((\d+) MiB, (\d+) MiB free\)\s*$")
 _SWAP = re.compile(r"(total|used|free) = ([0-9.]+)([KMG])")
@@ -53,8 +61,12 @@ def parse_vm_stat(text: str) -> dict[str, int]:
 
 
 def available_from_vm_stat(values: Mapping[str, int]) -> int:
-    """Free plus inactive pages: what can be used without paging (the psutil rule)."""
-    return values.get("free", 0) + values.get("inactive", 0)
+    """Free, speculative and inactive pages: what can be used without paging.
+
+    ``vm_stat`` lists speculative pages (file read-ahead) apart from free ones, though the
+    kernel counts them as free.
+    """
+    return values.get("free", 0) + values.get("speculative", 0) + values.get("inactive", 0)
 
 
 def parse_swapusage(text: str) -> tuple[int, int]:
@@ -85,6 +97,30 @@ def parse_list_devices(text: str) -> list[Device]:
 
 def estimated_limit(total: int) -> int:
     return total * 2 // 3 if total <= SMALL_MAC else total * 3 // 4
+
+
+def read_working_set() -> int | None:
+    """``MTLDevice.recommendedMaxWorkingSetSize`` of the default GPU; None if Metal says nothing."""
+    try:
+        metal = ctypes.CDLL(_METAL)
+        objc = ctypes.CDLL(_OBJC)
+        metal.MTLCreateSystemDefaultDevice.restype = ctypes.c_void_p
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        address = ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+        # objc_msgSend takes the prototype of the method it calls, so cast it per call.
+        get = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_void_p)(address)
+        release = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)(address)
+        device = metal.MTLCreateSystemDefaultDevice()
+        if not device:
+            return None  # no Metal GPU (an Intel Mac without one, or a VM)
+        try:
+            size = get(device, objc.sel_registerName(b"recommendedMaxWorkingSetSize"))
+        finally:
+            release(device, objc.sel_registerName(b"release"))
+    except (OSError, AttributeError):
+        return None
+    return int(size) or None
 
 
 def _sysctl(host: Host, name: str) -> str | None:
@@ -150,19 +186,36 @@ def detect_gpus(host: Host, arch: str, devices: Sequence[Device] = ()) -> list[G
 
 
 def build_pools(
-    memory: MemoryInfo, gpus: Sequence[Gpu], devices: Sequence[Device] = ()
+    memory: MemoryInfo,
+    gpus: Sequence[Gpu],
+    devices: Sequence[Device] = (),
+    working_set: int | None = None,
 ) -> tuple[Pool, ...]:
-    """One unified pool, the size of Metal's limit, or a CPU-only RAM pool on an Intel Mac."""
+    """One unified pool capped at Metal's limit, or a CPU-only RAM pool on an Intel Mac.
+
+    The limit already leaves the rest of memory to the system, so the system's own use
+    is taken from the whole memory, not from the limit a second time. ``working_set`` is
+    the limit as Metal reports it; without it, ``llama-server`` or the estimate decides.
+    """
     in_use = max(0, memory.total - memory.available)
     if not gpus:
         name = "System RAM (CPU only)"
         return (
             Pool(
-                PoolKind.RAM, name, memory.total, baseline(memory.total, in_use), memory.available
+                PoolKind.RAM,
+                name,
+                memory.total,
+                baseline(memory.total, in_use),
+                memory.available,
+                margin=RECOMMEND_MARGIN,
+                apps_hint=True,
             ),
         )
     metal = next((d for d in devices if d.name.startswith("MTL")), None)
-    if metal is not None:
+    if working_set:
+        limit = min(memory.total, working_set)
+        note = f"Metal limit {limit / GIB:.0f} GiB"
+    elif metal is not None:
         limit = min(memory.total, metal.total_mib * MIB)
         note = f"Metal limit {limit / GIB:.0f} GiB"
     else:
@@ -172,8 +225,11 @@ def build_pools(
         Pool(
             kind=PoolKind.UNIFIED,
             name=f"Unified memory ({gpus[0].name}; {note})",
-            total=limit,
-            baseline=baseline(limit, in_use),
+            total=memory.total,
+            baseline=baseline(memory.total, in_use),
             available_now=min(memory.available, limit),
+            limit=limit,
+            margin=RECOMMEND_MARGIN,
+            apps_hint=True,
         ),
     )

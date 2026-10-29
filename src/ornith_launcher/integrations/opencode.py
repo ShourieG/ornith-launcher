@@ -322,23 +322,24 @@ def remove_entry(app, profile: Profile) -> None:
     text = path.read_text(encoding="utf-8")
     if has_comments(text):
         app.say(
-            f"Remove the provider {record['provider']} from {path} by hand (the file has comments)."
+            f"  Remove the provider {record['provider']} from {path} by hand (the file has "
+            "comments)."
         )
         return
     try:
         config = json.loads(text)
     except ValueError:
-        app.say(f"{path} is not valid JSON; remove the provider {record['provider']} by hand.")
+        app.say(f"  {path} is not valid JSON; remove the provider {record['provider']} by hand.")
         return
     backup(path, datetime.datetime.now())
     result = default_after_removal(
         without(config, record["provider"], profile.runtime.alias), record
     )
     write(path, result)
-    app.say(f"Removed {profile.runtime.alias} from {path} (a backup was kept).")
+    app.say(f"  Removed {profile.runtime.alias} from {path} (a backup was kept).")
     if config.get("model") != result.get("model"):
         app.say(
-            f"OpenCode's default model is {result['model']} again."
+            f"  OpenCode's default model is {result['model']} again."
             if result.get("model")
-            else "OpenCode has no default model set again, as before setup."
+            else "  OpenCode has no default model set again, as before setup."
         )

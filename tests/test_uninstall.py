@@ -11,6 +11,7 @@ from ornith_launcher.config import resolve_paths
 from ornith_launcher.installed import load_installed, record
 from ornith_launcher.profiles import list_profiles, load_profile, save_profile
 from ornith_launcher.runtime.docker import digest_reference
+from ornith_launcher.system.host import CommandResult
 from ornith_launcher.uninstall import has_installs, plan_removal
 from tests.runtime_fixtures import IMAGE, FakeDocker, profile
 
@@ -146,6 +147,20 @@ class UninstallTest(unittest.TestCase):
         self.assertEqual((left["provider"], left.get("instructions")), (mine["provider"], None))
         self.assertFalse(wrapper.exists())
 
+    def test_a_setup_takes_its_server_log_with_it(self):
+        logs = self.app.paths.logs
+        logs.mkdir(parents=True)
+        (logs / "nine.log").write_text("server output\n")
+        (logs / "found.log").write_text("server output\n")
+        # Remove one setup, "nine", Setup only, confirm.
+        self.assertEqual(self.uninstall("1", "2", "", "y"), 0)
+        self.assertFalse((logs / "nine.log").exists())
+        self.assertTrue((logs / "found.log").exists())  # another setup's log stays
+        text = self.out.getvalue()
+        self.assertIn("profile, server log, launch icon and menu entry; the model stays", text)
+        self.assertIn("  nine, with its server settings and server log\n", text)
+        self.assertIn("  Deleted the server log.\n", text)
+
     def only_found(self):
         """Leave just the setup that uses a model found elsewhere."""
         from ornith_launcher.profiles import delete_profile
@@ -224,6 +239,33 @@ class UninstallTest(unittest.TestCase):
         self.assertEqual(self.uninstall("2", "2", "y"), 0)  # setups and their models
         self.assertFalse(self.downloaded.exists())
 
+    def test_all_setups_can_go_with_their_models_and_llama_cpp(self):
+        # Remove all setups, Setups, models and llama.cpp, confirm.
+        self.assertEqual(self.uninstall("2", "3", "y"), 0)
+        self.assertEqual(list_profiles(self.app.paths), [])
+        self.assertFalse(self.downloaded.exists())
+        self.assertIn(("docker", "image", "rm", digest_reference(IMAGE)), self.host.calls)
+        self.assertEqual(load_installed(self.app.paths).images, [])
+        self.assertTrue(self.loose.exists())  # not a setup's model: only Everything deletes it
+        self.assertTrue(self.app.paths.config.exists())  # the launcher's own settings stay
+        self.assertIn("\nThe model server (llama.cpp image)\n  ", self.out.getvalue())
+
+    def test_llama_cpp_is_offered_only_when_the_launcher_fetched_it(self):
+        from ornith_launcher.installed import forget
+
+        forget(self.app.paths, "images", IMAGE)
+        self.uninstall("2", "3", "esc", "esc")
+        text = self.out.getvalue()
+        self.assertIn("llama.cpp is not offered: ornith-launcher pulled no llama.cpp image", text)
+        self.assertIn("That option is not available here.", text)
+        self.assertEqual(sorted(list_profiles(self.app.paths)), ["found", "nine"])
+
+    def test_everything_is_under_all_setups_while_there_are_setups(self):
+        self.uninstall("esc")
+        text = self.out.getvalue()
+        self.assertNotIn("Remove everything", text)
+        self.assertIn("2  Remove all setups", text)
+
     def test_all_setups_keep_loose_downloads_and_the_image(self):
         self.assertEqual(self.uninstall("2", "2", "y"), 0)
         self.assertEqual(list_profiles(self.app.paths), [])
@@ -232,7 +274,8 @@ class UninstallTest(unittest.TestCase):
         self.assertTrue(has_installs(self.app))  # the loose download and the image remain
 
     def test_everything_removes_only_what_the_launcher_made(self):
-        self.assertEqual(self.uninstall("4", "y"), 0)  # 3 is the unfinished downloads
+        # Remove all setups (2), Everything (4), confirm.
+        self.assertEqual(self.uninstall("2", "4", "y"), 0)
         for path in (self.downloaded, self.icon, self.menu, self.loose):
             self.assertFalse(path.exists(), path)
         self.assertFalse(Path(str(self.loose) + ".part").exists())
@@ -285,18 +328,118 @@ class UninstallTest(unittest.TestCase):
 
     def test_an_image_other_tags_use_is_kept(self):
         self.host.other_tags = True
-        self.uninstall("4", "y")
+        self.uninstall("2", "4", "y")
         self.assertIn("other tags keep it", self.out.getvalue())
 
     def test_nothing_is_deleted_without_a_yes(self):
         # Enter takes the default (no), the menu comes back, then input ends.
-        self.assertEqual(self.uninstall("4", ""), 1)
+        self.assertEqual(self.uninstall("2", "4", ""), 1)
         self.assertIn("Nothing more was removed.", self.out.getvalue())
         self.assertTrue(self.downloaded.exists())
         self.assertEqual(sorted(list_profiles(self.app.paths)), ["found", "nine"])
         self.assertEqual(
             load_profile(self.app.paths, "nine").integrations["shortcut"], str(self.menu)
         )
+
+    OPENCODE_UNINSTALL = ("uninstall", "--force", "--keep-config", "--keep-data")
+
+    def install_tools(self, opencode_ok: bool = True) -> None:
+        """Claude Code and OpenCode as their installers leave them, recorded as ours."""
+        versions = self.home / ".local/share/claude/versions"
+        versions.mkdir(parents=True)
+        (versions / "2.1.0").write_text("claude")
+        self.claude = self.home / ".local/bin/claude"
+        self.claude.parent.mkdir(parents=True, exist_ok=True)
+        self.claude.symlink_to(versions / "2.1.0")
+        self.claude_settings = self.home / ".claude" / "settings.json"
+        self.claude_settings.parent.mkdir()
+        self.claude_settings.write_text("{}")
+        self.claude_state = self.home / ".claude.json"
+        self.claude_state.write_text("{}")
+        opencode = self.home / ".opencode/bin/opencode"
+        opencode.parent.mkdir(parents=True)
+        opencode.write_text("opencode")
+        # What OpenCode's own uninstaller leaves: its plugin packages next to the program.
+        self.opencode_plugins = self.home / ".opencode/node_modules/some-plugin"
+        self.opencode_plugins.mkdir(parents=True)
+        self.opencode_uninstall = (str(opencode), *self.OPENCODE_UNINSTALL)
+        self.opencode_uninstall_all = (str(opencode), "uninstall", "--force")
+        self.host.programs[str(opencode)] = str(opencode)
+        failed = CommandResult(1, "", "permission denied")
+        reply = CommandResult(0, "", "") if opencode_ok else failed
+        self.host.commands[self.opencode_uninstall] = reply
+        self.host.commands[self.opencode_uninstall_all] = reply
+        record(self.app.paths, "tools", "claude")
+        record(self.app.paths, "tools", "opencode")
+
+    def test_coding_tools_the_launcher_installed_can_be_removed(self):
+        self.install_tools()
+        # Remove coding tools (4, after the unfinished downloads), All of them, keep their
+        # settings (Enter), confirm.
+        self.assertEqual(self.uninstall("4", "3", "", "y"), 0)
+        self.assertFalse(self.claude.exists() or self.claude.is_symlink())
+        self.assertFalse((self.home / ".local/share/claude").exists())
+        self.assertTrue(self.claude_settings.exists())  # the tool's own settings stay
+        self.assertTrue(self.claude_state.exists())
+        self.assertIn(self.opencode_uninstall, self.host.calls)
+        self.assertFalse((self.home / ".opencode").exists())  # what its uninstaller leaves
+        self.assertEqual(load_installed(self.app.paths).tools, [])
+        self.assertEqual(sorted(list_profiles(self.app.paths)), ["found", "nine"])
+        text = self.out.getvalue()
+        self.assertIn("Claude Code and OpenCode, which ornith-launcher installed", text)
+        # Each names the command it takes away.
+        self.assertIn(
+            "\nCoding tools ornith-launcher installed\n  Claude Code (the claude command): ", text
+        )
+        self.assertIn("2  OpenCode     the opencode command: ~/.opencode", text)
+        removed = "  Removed Claude Code (the claude command).\n  Removed OpenCode (the opencode"
+        self.assertIn(removed, text)
+        self.assertIn("\nKept (the coding tools' own settings and history)\n  Claude Code: ", text)
+
+    def test_their_settings_and_history_go_too_only_when_asked(self):
+        self.install_tools()
+        self.uninstall("4", "3", "y", "y")  # All of them, delete settings too, confirm
+        self.assertFalse(self.claude_settings.exists())
+        self.assertFalse(self.claude_state.exists())
+        self.assertIn(self.opencode_uninstall_all, self.host.calls)  # no --keep-* options
+        self.assertNotIn(self.opencode_uninstall, self.host.calls)
+        text = self.out.getvalue()
+        self.assertIn("  Claude Code's own ~/.claude and ~/.claude.json: its settings", text)
+        # The question starts its own screen, not under the menu it came from.
+        question = text.index("\nUninstall: coding tools\n")
+        self.assertLess(text.index("Remove which coding tool?"), question)
+        self.assertLess(question, text.index("Uninstall: what will be deleted"))
+
+    def test_a_failed_tool_removal_says_how_to_finish_it(self):
+        self.install_tools(opencode_ok=False)
+        self.uninstall("4", "2", "", "y")  # OpenCode only, keep its settings
+        self.assertTrue(self.claude.is_symlink())  # not picked
+        text = self.out.getvalue()
+        self.assertIn("Could not remove OpenCode (permission denied).", text)
+        self.assertIn(
+            "Remove it later with: ~/.opencode/bin/opencode uninstall --keep-config --keep-data "
+            "&& rm -rf ~/.opencode",
+            text,
+        )
+        self.assertTrue(self.opencode_plugins.exists())  # left alone when its uninstaller failed
+        self.assertEqual(load_installed(self.app.paths).tools, ["claude", "opencode"])
+
+    def test_tools_not_installed_by_the_launcher_are_never_offered(self):
+        self.uninstall("")
+        self.assertNotIn("Remove coding tools", self.out.getvalue())
+
+    def test_everything_keeps_the_coding_tools_unless_asked(self):
+        self.install_tools()
+        self.uninstall("2", "4", "", "y")  # everything; Enter keeps the tools; confirm
+        self.assertTrue(self.claude.is_symlink())
+        self.assertNotIn(self.opencode_uninstall, self.host.calls)
+        self.assertFalse(self.app.paths.config.exists())
+
+    def test_everything_can_remove_the_coding_tools_too(self):
+        self.install_tools()
+        self.uninstall("2", "4", "y", "", "y")  # everything, the tools too, keep settings
+        self.assertFalse(self.claude.is_symlink())
+        self.assertIn(self.opencode_uninstall, self.host.calls)
 
     def test_digest_reference(self):
         self.assertEqual(

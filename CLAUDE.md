@@ -6,7 +6,7 @@ without any AI assistance; this file only helps people and agents who develop it
 ## Project
 
 `ornith-launcher` is an unofficial command-line tool that sets up and launches Ornith models locally with
-llama.cpp. It is licensed under Apache-2.0.
+llama.cpp. It is licensed under GPL-3.0-or-later.
 
 ## Setup
 

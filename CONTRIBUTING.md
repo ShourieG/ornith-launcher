@@ -27,9 +27,8 @@ ruff check . && ruff format --check .                            # lint and form
 shellcheck ornith-launcher                                       # entry script
 ```
 
-CI runs the unit tests on Linux with Python 3.9 and the latest Python, plus ruff and shellcheck. The macOS job is
-switched off for now (see `.github/workflows/ci.yml`), so if your change touches macOS code, run the unit tests
-on a Mac too. The integration tests need a model file: `ORNITH_IT_MODEL=/path/to/model.gguf`. On Linux they use
+CI runs the unit tests on Linux and macOS with Python 3.9 and the latest Python, plus ruff and shellcheck. The
+integration tests need a model file: `ORNITH_IT_MODEL=/path/to/model.gguf`. On Linux they use
 Docker and a GPU; on a Mac, `tests.integration.test_native` installs the pinned llama.cpp build into a temporary
 folder. Windows is not supported yet.
 
@@ -58,8 +57,8 @@ git commit -s
 ```
 
 That adds a `Signed-off-by: Your Name <you@example.com>` line, which states that you have the right to submit the
-change under the project's licence (Apache-2.0). Under section 5 of that licence, your contribution is licensed
-under the same terms.
+change under the project's licence (GPL-3.0-or-later, with the additional terms in [NOTICE](NOTICE)). Your
+contribution is licensed under the same terms, and you keep the copyright in it.
 
 ## Pull requests
 

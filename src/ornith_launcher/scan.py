@@ -173,9 +173,10 @@ def print_system(app: App, report: SystemReport) -> None:
     elif p.os != "darwin":
         app.say(f"Docker: {docker_text}; llama.cpp image: {image}")
     for pool in report.pools:
+        limit = f", at most {gib(pool.usable)} for the GPU" if pool.limited else ""
         app.say(
             f"Memory: {pool.name}: {gib(pool.total)}, about {gib(pool.baseline)} in use by the "
-            f"system, so plans use up to {gib(pool.usable * HEADROOM)} (15% kept free)"
+            f"system{limit}, so plans use up to {gib(pool.usable * HEADROOM)} (15% kept free)"
         )
     for problem in report.problems:
         label = "Problem" if problem.severity.value == "blocking" else "Warning"

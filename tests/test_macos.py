@@ -11,6 +11,8 @@ import hashlib
 import io
 import itertools
 import os
+import re
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -21,12 +23,15 @@ from ornith_launcher import cli, launch
 from ornith_launcher.app import App
 from ornith_launcher.bench.perplexity import native_perplexity_args
 from ornith_launcher.config import read_json, resolve_paths
+from ornith_launcher.download import Status
 from ornith_launcher.errors import DataFileError
 from ornith_launcher.installed import load_installed, record
 from ornith_launcher.integrations.terminals import (
+    APPLESCRIPT_TIMEOUT,
     command_script,
     current_terminal,
     detect_terminals,
+    iterm_script,
     open_in_terminal,
     runs_in,
 )
@@ -43,6 +48,7 @@ from ornith_launcher.runtime.native import (
 )
 from ornith_launcher.runtime.server import fit_params_args
 from ornith_launcher.system import macos
+from ornith_launcher.system.host import CommandResult, LocalHost
 from ornith_launcher.system.memory import PoolKind, read_meminfo
 from ornith_launcher.system.platform import detect_platform
 from ornith_launcher.system.report import Severity, check_system
@@ -126,7 +132,8 @@ class ParseTest(unittest.TestCase):
     def test_vm_stat_uses_its_own_page_size(self):
         values = macos.parse_vm_stat(VM_STAT)
         self.assertEqual(values["free"], 100000 * 16384)
-        self.assertEqual(macos.available_from_vm_stat(values), 900000 * 16384)
+        # vm_stat lists speculative pages apart from free ones; both can be used at once.
+        self.assertEqual(macos.available_from_vm_stat(values), 950000 * 16384)
 
     def test_swap_and_version(self):
         self.assertEqual(macos.parse_swapusage(SWAP), (2048 * 1024**2, 1536 * 1024**2))
@@ -152,7 +159,7 @@ class PlatformTest(unittest.TestCase):
     def test_memory_comes_from_sysctl_and_vm_stat(self):
         values = read_meminfo(mac_host())
         self.assertEqual(values["MemTotal"], 64 * GIB)
-        self.assertEqual(values["MemAvailable"], 900000 * 16384)
+        self.assertEqual(values["MemAvailable"], 950000 * 16384)
         self.assertEqual(values["SwapTotal"] - values["SwapFree"], 512 * 1024**2)
 
 
@@ -164,10 +171,12 @@ class SystemCheckTest(unittest.TestCase):
         self.assertEqual(report.blocking, ())
         (pool,) = report.pools
         self.assertIs(pool.kind, PoolKind.UNIFIED)
-        self.assertEqual(pool.total, 48 * GIB)  # three quarters of 64 GiB until Metal says
+        self.assertEqual(pool.total, 64 * GIB)
+        self.assertEqual(pool.limit, 48 * GIB)  # three quarters of 64 GiB until Metal says
+        self.assertEqual(pool.usable, 48 * GIB)
         self.assertIn("ESTIMATED", pool.name)
         self.assertEqual([g.vendor for g in report.gpus], ["apple"])
-        self.assertTrue(any("not been tested on a Mac" in p.message for p in report.warnings))
+        self.assertEqual(report.warnings, ())  # an Apple Silicon Mac needs no warning
         self.assertFalse(any("Docker" in p.message for p in report.problems))
 
     def test_metal_limit_is_read_once_the_runtime_is_installed(self):
@@ -183,9 +192,49 @@ class SystemCheckTest(unittest.TestCase):
                 host, load_pins(), system="Darwin", machine="arm64", runtime_root=root
             )
         (pool,) = report.pools
-        self.assertEqual(pool.total, 48 * GIB)
+        self.assertEqual(pool.limit, 48 * GIB)
         self.assertIn("Metal limit 48 GiB", pool.name)
         self.assertNotIn("ESTIMATED", pool.name)
+
+    def test_metal_itself_is_asked_before_the_runtime_or_the_estimate(self):
+        host = mac_host(32 * GIB, metal=25 * GIB)
+        host.commands[("llama-server", "--list-devices")] = ok(DEVICES)  # never reached
+        report = check_system(host, load_pins(), system="Darwin", machine="arm64")
+        (pool,) = report.pools
+        self.assertEqual(pool.limit, 25 * GIB)
+        self.assertIn("Metal limit 25 GiB", pool.name)
+        self.assertNotIn("ESTIMATED", pool.name)
+        self.assertEqual(pool.usable, 24 * GIB)  # 32 GiB less the system's 8 GiB is lower
+
+    def test_without_a_gpu_metal_is_not_asked(self):
+        host = mac_host(metal=25 * GIB)
+        report = check_system(host, load_pins(), system="Darwin", machine="x86_64")
+        self.assertIsNone(report.pools[0].limit)
+
+    def test_reading_metal_is_safe_on_any_machine(self):
+        limit = macos.read_working_set()
+        if sys.platform != "darwin":
+            self.assertIsNone(limit)
+            self.assertIsNone(LocalHost().metal_working_set())
+        else:  # a CI Mac may have no Metal device
+            self.assertTrue(limit is None or limit > 0)
+
+    def test_the_system_share_is_not_taken_from_the_metal_limit_again(self):
+        # A busy 32 GiB Mac: the limit (2/3, about 21.3 GiB) already leaves the rest to the
+        # system, so the whole limit is usable, not the limit less a quarter of it.
+        report = check_system(mac_host(32 * GIB), load_pins(), system="Darwin", machine="arm64")
+        (pool,) = report.pools
+        self.assertEqual(pool.baseline, 8 * GIB)  # a quarter of 32 GiB, the clamp
+        self.assertEqual(pool.usable, macos.estimated_limit(32 * GIB))
+        self.assertTrue(pool.limited)
+
+    def test_mac_pools_ask_for_a_margin_and_name_apps_to_close(self):
+        for machine in ("arm64", "x86_64"):
+            with self.subTest(machine):
+                report = check_system(mac_host(), load_pins(), system="Darwin", machine=machine)
+                (pool,) = report.pools
+                self.assertEqual(pool.margin, macos.RECOMMEND_MARGIN)
+                self.assertTrue(pool.apps_hint)
 
     def test_old_macos_is_blocked_and_intel_runs_on_the_cpu(self):
         report = check_system(
@@ -253,11 +302,22 @@ class NativeTestCase(unittest.TestCase):
 
 class InstallTest(NativeTestCase):
     def fetch_from(self, archive: Path):
-        def fetch(asset, dest):
+        def fetch(asset, dest, on_progress):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(archive.read_bytes())
+            size = len(archive.read_bytes())
+            on_progress(Status(dest.name, "download", size, size))
 
         return fetch
+
+    def test_pull_shows_download_progress(self):
+        archive = make_archive(self.root, {"llama-server": "s"})
+        runtime = self.runtime(pins=pins_for(archive), fetch=self.fetch_from(archive))
+        runtime.pull(REFERENCE)
+        text = runtime.out.getvalue()
+        self.assertTrue(text.startswith("  From the official llama.cpp release: https://"))
+        self.assertRegex(text, r"\n  \[#+\] 100%")
+        self.assertIn("  Matches its pinned sha256.", text)
 
     def test_pull_checks_and_unpacks_the_whole_folder(self):
         archive = make_archive(
@@ -495,9 +555,114 @@ class MacCommandsTest(unittest.TestCase):
         self.assertIn("The model server (llama.cpp b11552 for macOS on Apple Silicon)", text)
         self.assertIn("Download it now (about 12 MB)?", text)
 
-    def test_setup_shortcuts_writes_command_files(self):
+    def fake_osacompile(self):
+        """osacompile that makes the app folder, as the real one does; argv kept for checks."""
+        self.compiled = []
+        run = self.host.run
+
+        def fake(argv, timeout=10.0):
+            if argv[0] != "osacompile":
+                return run(argv, timeout)
+            self.compiled.append(list(argv))
+            (Path(argv[2]) / "Contents" / "MacOS").mkdir(parents=True)
+            return ok("")
+
+        self.host.run = fake
+
+    def test_setup_shortcuts_build_an_app(self):
+        from ornith_launcher.uninstall import remove_created
+
         (self.root / "Desktop").mkdir()
+        self.host.env["PATH"] = "/opt/homebrew/bin:/usr/bin:/bin"
+        self.profile.terminal = {"id": "iterm2"}
+        save_profile(self.app.paths, self.profile)
+        self.fake_osacompile()
         answers = iter(["", "y"])  # desktop icon (default yes), Applications folder yes
+        self.app.read_line = lambda prompt: next(answers)
+        self.assertEqual(self.run_cli("setup", "--plain", "--shortcuts", self.profile.name), 0)
+        saved = load_profile(self.app.paths, self.profile.name)
+        icon = Path(saved.integrations["desktop_copy"])
+        menu = Path(saved.integrations["shortcut"])
+        self.assertEqual(icon, self.root / "Desktop" / f"Ornith {self.profile.name}.app")
+        self.assertEqual(menu, self.root / "Applications" / f"Ornith {self.profile.name}.app")
+        self.assertTrue(icon.is_dir())
+        argv = self.compiled[0]
+        self.assertEqual(argv[:3], ["osacompile", "-o", str(icon)])
+        script = "\n".join(argv[4::2])
+        # The PATH setup ran with, so the app finds the same Python; and always a window.
+        self.assertIn("PATH=/opt/homebrew/bin:/usr/bin:/bin; export PATH; exec ", script)
+        self.assertIn(f"launch {self.profile.name} --window", script)
+        self.assertIn("display alert", script)
+        text = self.out.getvalue()
+        self.assertIn("macOS asks whether it may control iTerm2; choose Allow.", text)
+        self.assertIn("Find it there in Finder, Launchpad or Spotlight.", text)
+        self.assertEqual(load_installed(self.app.paths).shortcuts, [str(icon), str(menu)])
+        # Asking again finds both apps, folders though they are, and adds nothing.
+        self.assertEqual(self.run_cli("setup", "--plain", "--shortcuts", self.profile.name), 0)
+        self.assertEqual(len(self.compiled), 2)
+        remove_created(self.app, saved)
+        self.assertFalse(icon.exists() or menu.exists())
+
+    def app_macos_will_not_let_us_delete(self):
+        """A launch app that has run: App Management refuses to delete what is inside."""
+        import shutil
+
+        from ornith_launcher import uninstall
+
+        (self.root / "Desktop").mkdir()
+        self.fake_osacompile()
+        answers = iter(["", "n"])
+        self.app.read_line = lambda prompt: next(answers)
+        self.run_cli("setup", "--plain", "--shortcuts", self.profile.name)
+        saved = load_profile(self.app.paths, self.profile.name)
+        real_rmtree = shutil.rmtree  # what Finder does, for the test that lets it
+        refused = PermissionError(1, "Operation not permitted")
+        patcher = mock.patch.object(uninstall.shutil, "rmtree", side_effect=refused)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return saved, Path(saved.integrations["desktop_copy"]), real_rmtree
+
+    def test_an_app_macos_protects_goes_to_the_trash_through_finder(self):
+        from ornith_launcher.uninstall import remove_created
+
+        saved, icon, rmtree = self.app_macos_will_not_let_us_delete()
+        run = self.host.run
+        finder = []
+
+        def fake(argv, timeout=10.0):
+            if argv[0] == "osascript":
+                finder.append(argv[2])
+                rmtree(icon)  # Finder moves it to the Trash
+                return ok("")
+            return run(argv, timeout)
+
+        self.host.run = fake
+        remove_created(self.app, saved)
+        self.assertFalse(icon.exists())
+        self.assertIn('tell application "Finder" to delete (POSIX file "', finder[0])
+        self.assertIn("to the Trash (macOS let only Finder remove it)", self.out.getvalue())
+        self.assertNotIn(str(icon), load_installed(self.app.paths).shortcuts)
+
+    def test_an_app_nothing_may_delete_is_named_and_the_rest_goes_on(self):
+        from ornith_launcher.uninstall import remove_created
+
+        saved, icon, _ = self.app_macos_will_not_let_us_delete()
+        saved.runtime.template.source, saved.runtime.template.file = (
+            "patched",
+            str(self.root / "patched.jinja"),
+        )
+        Path(saved.runtime.template.file).write_text("t")
+        remove_created(self.app, saved)  # no osascript here, so Finder cannot help either
+        text = self.out.getvalue()
+        self.assertIn(f"Could not delete {icon} (Operation not permitted).", text)
+        self.assertIn("Privacy & Security > App Management", text)
+        self.assertTrue(icon.exists())
+        self.assertIn(str(icon), load_installed(self.app.paths).shortcuts)  # tried again later
+        self.assertFalse(Path(saved.runtime.template.file).exists())  # the rest went on
+
+    def test_setup_shortcuts_fall_back_to_command_files_without_osacompile(self):
+        (self.root / "Desktop").mkdir()
+        answers = iter(["", "y"])
         self.app.read_line = lambda prompt: next(answers)
         self.assertEqual(self.run_cli("setup", "--plain", "--shortcuts", self.profile.name), 0)
         saved = load_profile(self.app.paths, self.profile.name)
@@ -507,11 +672,51 @@ class MacCommandsTest(unittest.TestCase):
         self.assertTrue(os.access(icon, os.X_OK))
         menu = Path(saved.integrations["shortcut"])
         self.assertEqual(menu.parent, self.root / "Applications")
+        self.assertEqual(menu.suffix, ".command")
         text = self.out.getvalue()
+        self.assertIn("osacompile could not build an app, so this is a .command file", text)
         self.assertIn("If macOS asks before opening it the first time, choose Open.", text)
-        self.assertIn("Find it there in Finder, or with Spotlight.", text)
         self.assertNotIn(("gio",), [call[:1] for call in self.host.calls])
         self.assertEqual(load_installed(self.app.paths).shortcuts, [str(icon), str(menu)])
+
+    def test_each_finishing_question_starts_a_fresh_screen(self):
+        from types import SimpleNamespace
+
+        from ornith_launcher.integrations import setup as integrations
+        from ornith_launcher.setup_profile import ask_shortcuts, offer_chat_log
+        from ornith_launcher.ui.prompts import PlainPrompter
+
+        titles = []
+        prompter = PlainPrompter(read_line=lambda prompt: "n", out=self.out)
+        prompter.new_screen = titles.append
+        plan = SimpleNamespace(report=SimpleNamespace(platform=SimpleNamespace(headless=False)))
+        integrations.choose(self.app, PlainPrompter(read_line=lambda p: "", out=self.out))
+        offer_chat_log(self.app, prompter, plan, self.profile)
+        (self.root / "Desktop").mkdir()
+        ask_shortcuts(self.app, prompter, self.profile)
+        self.assertEqual(titles, ["Chat log", "Launch icon"])
+        self.assertIn("\nCoding tools\n\n", self.out.getvalue())  # its own screen too
+
+    def test_launch_window_always_opens_one(self):
+        # "This terminal" has no terminal to mean from an app: the system's one opens.
+        self.profile.terminal = {"id": "this"}
+        save_profile(self.app.paths, self.profile)
+        self.host.programs["open"] = "/usr/bin/open"
+        self.assertEqual(self.run_cli("launch", self.profile.name, "--window"), 0)
+        ((argv),) = self.host.spawned
+        self.addCleanup(Path(argv[3]).unlink, missing_ok=True)
+        self.assertEqual(argv[:3], ("open", "-a", "Terminal"))
+        self.assertIn("--here", Path(argv[3]).read_text())
+        self.assertEqual(self.host.processes, {})  # nothing ran in the app itself
+
+    def test_launch_window_fails_rather_than_run_unseen(self):
+        self.profile.terminal = {"id": "this"}
+        save_profile(self.app.paths, self.profile)
+        self.assertEqual(self.run_cli("launch", self.profile.name, "--window"), 1)  # no "open"
+        err = self.app.err.getvalue()
+        self.assertIn("no terminal window could be opened", err)
+        self.assertIn(f"ornith-launcher launch {self.profile.name}", err)
+        self.assertEqual(self.host.started, [])
 
     def test_uninstall_everything_deletes_the_runtime_it_downloaded(self):
         from ornith_launcher.uninstall import apply_removal, plan_removal
@@ -572,6 +777,36 @@ class MacTerminalTest(unittest.TestCase):
             script.read_text(), command_script(["/x/ornith-launcher", "launch", "a"], "Ornith: a")
         )
         self.assertTrue(os.access(script, os.X_OK))
+
+    def iterm(self, reply):
+        host = FakeHost(env={"HOME": "/Users/a"}, files={"/Applications/iTerm.app/Info": ""})
+        self.ran = []
+        host.run = lambda argv, timeout=10.0: self.ran.append((list(argv), timeout)) or reply
+        return host, detect_terminals(host, "darwin").installed[1]
+
+    def test_iterm_gets_the_script_typed_in_so_it_does_not_ask_to_run_a_file(self):
+        host, iterm = self.iterm(ok(""))
+        command = ["/x/ornith-launcher", "launch", "a"]
+        self.assertTrue(open_in_terminal(host, iterm, command, "Ornith: a"))
+        self.assertEqual(host.spawned, [])  # never "open -a iTerm", which asks "OK to run"
+        ((argv, timeout),) = self.ran
+        self.assertEqual(argv[:2], ["osascript", "-e"])
+        self.assertEqual(timeout, APPLESCRIPT_TIMEOUT)  # room for macOS's one-time question
+        self.assertIn("create window with default profile", argv[2])
+        script = Path(re.search(r'write text "(.+); exit"', argv[2]).group(1))
+        self.addCleanup(script.unlink, missing_ok=True)
+        self.assertEqual(script.read_text(), command_script(command, "Ornith: a"))
+
+    def test_a_refused_iterm_window_leaves_no_script_and_names_the_fix(self):
+        host, iterm = self.iterm(CommandResult(1, "", "Not authorized to send Apple events"))
+        self.assertFalse(open_in_terminal(host, iterm, ["/x/ornith-launcher"], "Ornith: a"))
+        script = Path(re.search(r'write text "(.+); exit"', self.ran[0][0][2]).group(1))
+        self.assertFalse(script.exists())
+        self.assertIn("Privacy & Security > Automation", iterm.failure_hint)
+
+    def test_the_iterm_script_quotes_odd_paths(self):
+        text = iterm_script(Path('/tmp/a "b" c.command'))
+        self.assertIn('write text "\'/tmp/a \\"b\\" c.command\'; exit"', text)
 
     def test_the_script_removes_itself_and_quotes_paths(self):
         text = command_script(["/Users/a b/ornith-launcher", "launch", "a"], "Ornith: a")

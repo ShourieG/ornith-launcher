@@ -5,9 +5,12 @@ terminals stay in the foreground and would block it, and passes everything on
 the command line, because Konsole may hand the command to an existing process
 with a different environment.
 
-On macOS, Terminal and iTerm2 are given a small ``.command`` script to open
-(``open -a Terminal``). That needs no AppleScript, so macOS never asks for
-Automation permission; the script deletes itself as it starts.
+On macOS, Terminal is given a small ``.command`` script to open (``open -a
+Terminal``), which needs no AppleScript, so macOS never asks for Automation
+permission. iTerm2 asks "OK to run ...?" before every file it is handed that way,
+so it gets the same script typed into a new window through its AppleScript
+instead: macOS asks once whether the app running the launcher may control iTerm2.
+The script deletes itself as it starts.
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ class Terminal:
     name: str
     argv: tuple[str, ...]  # prefix before the command; "{title}" is replaced
     opens_file: bool = False  # macOS apps: given a .command script instead of the command
+    via_applescript: bool = False  # iTerm2: the script is typed into a new window instead
+    failure_hint: str = ""  # what to do when the window did not open, for the message
 
     def command(self, command: Sequence[str], title: str) -> list[str]:
         prefix = [part.replace("{title}", title) for part in self.argv]
@@ -58,7 +63,18 @@ _BY_ID = {t.id: t for t in KNOWN}
 # macOS: the system's Terminal is always there; iTerm2 when installed; and the
 # terminals above that run the same way on a Mac.
 MAC_TERMINAL = Terminal("terminal-app", "Terminal", ("open", "-a", "Terminal"), opens_file=True)
-ITERM = Terminal("iterm2", "iTerm2", ("open", "-a", "iTerm"), opens_file=True)
+ITERM = Terminal(
+    "iterm2",
+    "iTerm2",
+    ("osascript",),
+    via_applescript=True,
+    failure_hint=(
+        "If macOS asked to let this terminal control iTerm2 and it was refused, allow it in "
+        "System Settings > Privacy & Security > Automation."
+    ),
+)
+# The first time, osascript waits while macOS asks for Automation permission.
+APPLESCRIPT_TIMEOUT = 120.0
 _MAC_CLI = ("kitty", "alacritty", "wezterm")
 # Names that resolve to a known terminal, e.g. Debian's x-terminal-emulator alternative.
 _ALIASES = {"gnome-terminal.wrapper": "gnome-terminal", "konsole5": "konsole"}
@@ -172,6 +188,13 @@ def runs_in(terminal_id: str, env: Mapping[str, str]) -> bool:
 
 
 def open_in_terminal(host: Host, terminal: Terminal, command: Sequence[str], title: str) -> bool:
+    if terminal.via_applescript:
+        script = write_command_script(command, title)
+        result = host.run(["osascript", "-e", iterm_script(script)], timeout=APPLESCRIPT_TIMEOUT)
+        if result is not None and result.ok:
+            return True
+        script.unlink(missing_ok=True)  # never ran, so it did not delete itself
+        return False
     if terminal.opens_file:
         return host.spawn([*terminal.argv, str(write_command_script(command, title))])
     return host.spawn(terminal.command(command, title))
@@ -184,6 +207,21 @@ def command_script(command: Sequence[str], title: str) -> str:
         'rm -f "$0"\n'
         f"printf '\\033]0;%s\\007' {shlex.quote(title)}\n"
         f"exec {shlex.join(command)}\n"
+    )
+
+
+def iterm_script(script: Path) -> str:
+    """AppleScript that types ``script; exit`` into a new iTerm2 window's shell.
+
+    This is what iTerm2 does with a file it is asked to open, minus its "OK to run" prompt.
+    """
+    line = f"{shlex.quote(str(script))}; exit"
+    quoted = line.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        'tell application "iTerm"\n'
+        "    set w to (create window with default profile)\n"
+        f'    tell current session of w to write text "{quoted}"\n'
+        "end tell"
     )
 
 

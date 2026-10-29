@@ -11,10 +11,19 @@ import datetime
 import json
 from pathlib import Path
 
+from ornith_launcher import installed
 from ornith_launcher.app import App
 from ornith_launcher.config import atomic_write_text
 from ornith_launcher.integrations import claude_code, opencode
-from ornith_launcher.integrations.installers import CLAUDE_CODE, OPENCODE, Installer, find, install
+from ornith_launcher.integrations.installers import (
+    CLAUDE_CODE,
+    OPENCODE,
+    Installer,
+    find,
+    install,
+    new_window_finds,
+    path_line,
+)
 from ornith_launcher.profiles import Profile, TemplateInfo
 from ornith_launcher.templates import compat
 from ornith_launcher.ui.prompts import Choice, PlainPrompter
@@ -32,23 +41,26 @@ SUGGESTED = 2  # Claude Code, the tool Ornith's makers suggest
 def choose(app: App, prompter: PlainPrompter) -> str:
     claude = find(CLAUDE_CODE, app.host, app.home)
     code = find(OPENCODE, app.host, app.home)
-    prompter.section("Coding tools")
-    app.say(
-        f"  Claude Code: {'installed' if claude else 'not installed'}. "
-        f"OpenCode: {'installed' if code else 'not installed'}."
-    )
+    prompter.new_screen("Coding tools")
+    bold = prompter.bold
+    # One line per tool, then each note apart, so the screen reads in steps.
+    app.say(f"  {bold('Claude Code')}  {'installed' if claude else 'not installed'}")
+    app.say(f"  {bold('OpenCode')}     {'installed' if code else 'not installed'}")
+    app.say()
     prompter.paragraph(
-        "Claude Code needs a small chat-template fix for this model; the fix is applied to a "
-        "copy, the model file is not changed.",
+        f"{bold('Claude Code')} needs a small chat-template fix for this model; the fix is "
+        "applied to a copy, the model file is not changed.",
         indent="  ",
     )
+    app.say()
     prompter.paragraph(
-        "OpenCode also gets picture instructions: a short file, added to OpenCode's "
+        f"{bold('OpenCode')} also gets picture instructions: a short file, added to OpenCode's "
         "instructions, that goes into the system prompt of every OpenCode session, for every "
         "model, and tells models how to show charts and diagrams in the chat. Uninstall removes "
         "it with the last Ornith model.",
         indent="  ",
     )
+    app.say()
     prompter.paragraph(f"Note: {claude_code.ANTHROPIC_NOTICE}", indent="  ")
     picked = prompter.choose(
         "Connect the model to a coding tool?",
@@ -83,17 +95,45 @@ def configure(
 def _ensure_installed(app: App, prompter: PlainPrompter, installer: Installer) -> bool:
     if find(installer, app.host, app.home):
         return True
-    app.say(f"{installer.name} is not installed. Its official installer is: {installer.command}")
+    app.say(
+        f"{prompter.bold(installer.name)} (the {installer.binary} command-line app) is not "
+        f"installed. Its official installer is: {installer.command}"
+    )
     if not prompter.confirm(f"Install {installer.name} now?", default=True):
         app.say(f"Skipping {installer.name}.")
         return False
-    binary = install(installer, app.host, app.home)
+    if installer.wait_note:
+        prompter.paragraph(f"Installing {installer.name}. {installer.wait_note}")
+    binary = install(installer, app.host, app.home, path=app.env.get("PATH", ""))
     if binary is None:
         app.say(f"{installer.name} did not install. Run the command above yourself, then:")
         app.say("  ornith-launcher setup --integrations <profile>")
         return False
-    app.say(f"Installed {installer.name}: {binary}")
+    # Only what the launcher installed is ever offered for removal.
+    installed.record(app.paths, "tools", installer.binary)
+    # The installer's own output stays in the scrollback; the questions go on afresh.
+    prompter.new_screen(f"Setting up {installer.name}")
+    app.say(f"Installed {prompter.bold(installer.name)}: {binary}")
+    _say_how_to_start(app, installer, Path(binary))
     return True
+
+
+def _say_how_to_start(app: App, installer: Installer, binary: Path) -> None:
+    """Name the command, and give the PATH line when a new terminal window would not find it."""
+    command = installer.binary
+    app.say(
+        f"  {installer.name} is a command-line app: type {command} in a new terminal window "
+        "to start it (this one may not find it yet)."
+    )
+    shell = app.env.get("SHELL", "")
+    if app.os_name == "windows" or new_window_finds(
+        app.host, app.home, shell, app.os_name, command
+    ) in (True, None):
+        return
+    app.say(
+        f"  A new terminal window would not find {command}: {binary.parent} is not on its PATH."
+    )
+    app.say(f"    To add it: {path_line(app.home, shell, app.os_name, binary.parent)}")
 
 
 def _set_up_claude(app: App, profile: Profile, is_default: bool) -> None:

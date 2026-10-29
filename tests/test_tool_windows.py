@@ -70,11 +70,17 @@ class ToolWindowsTest(unittest.TestCase):
         self.assertEqual(self.profile.terminal["tools_folder"], str(self.root.resolve()))
         self.assertIn("stay open when the server stops", self.out.getvalue())
 
-    def test_one_tool_is_a_yes_or_no_question_that_defaults_to_no(self):
+    def test_both_tools_open_by_default(self):
+        tool_windows.offer(self.app, self.prompter("", ""), self.profile, headless=False)
+        self.assertEqual(self.profile.terminal["open_tools"], ["claude_code", "opencode"])
+
+    def test_one_tool_is_a_yes_or_no_question_that_defaults_to_yes(self):
         self.profile.integrations.pop("opencode")
-        tool_windows.offer(self.app, self.prompter(""), self.profile, headless=False)
+        tool_windows.offer(self.app, self.prompter("", ""), self.profile, headless=False)
+        self.assertEqual(self.profile.terminal["open_tools"], ["claude_code"])
+        self.assertIn("Open Claude Code when this model starts? [Y/n]", "".join(self.asked))
+        tool_windows.offer(self.app, self.prompter("n"), self.profile, headless=False)
         self.assertNotIn("open_tools", self.profile.terminal)
-        self.assertIn("Open Claude Code when this model starts?", "".join(self.asked))
 
     def test_a_folder_that_does_not_exist_is_asked_again(self):
         project = self.root / "project"

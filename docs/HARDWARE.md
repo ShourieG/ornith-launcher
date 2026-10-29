@@ -15,8 +15,8 @@ runs them; reports are welcome.
 | Linux, Intel GPU (amd64) | Docker, `server-intel` | Untested |
 | Linux, no GPU | Docker, `server` (CPU) | Untested |
 | Windows | Native llama.cpp, no Docker | Planned for a later release |
-| macOS 13.3 or newer, Apple Silicon | Native llama.cpp b11552 with Metal, no Docker | Built, not yet run on a Mac |
-| macOS 13.3 or newer, Intel | Native llama.cpp b11552 on the CPU, no Docker | Built, not yet run on a Mac |
+| macOS 13.3 or newer, Apple Silicon | Native llama.cpp b11552 with Metal, no Docker | Tested on a MacBook Pro (M1 Max, 32 GB, macOS 26.6.2) |
+| macOS 13.3 or newer, Intel | Native llama.cpp b11552 on the CPU, no Docker | Built, not yet run on an Intel Mac |
 
 ## Linux distributions
 
@@ -51,9 +51,10 @@ GPU, and a VRAM pool per discrete GPU next to a system RAM pool. A plan must lea
 memory the system already uses. On a discrete GPU, Mixture-of-Experts models (35B, 122B, 397B) can keep their
 experts in system RAM (`--cpu-moe`); that placement is ESTIMATED.
 
-On a Mac the GPU can use only part of the memory, a limit Metal sets, so the plan uses that limit as its pool. Until
-the llama.cpp build is installed it is an estimate (two thirds of the memory up to 36 GiB, three quarters above,
-ESTIMATED); after that the launcher reads it from llama.cpp.
+On a Mac the GPU can use only part of the memory, a limit Metal sets. The plan uses the whole memory less what the
+system uses, capped at that limit. The launcher reads the limit from Metal itself; if that fails, from llama.cpp
+once its build is installed; and only then estimates it (two thirds of the memory up to 36 GiB, three quarters
+above, ESTIMATED). On the tested M1 Max with 32 GB, Metal reported 24.96 GiB, 78% of the memory (TESTED reading).
 
 ## Requirements
 

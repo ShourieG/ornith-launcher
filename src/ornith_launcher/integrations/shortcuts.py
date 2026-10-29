@@ -1,5 +1,10 @@
 """Desktop shortcuts that launch a profile with a double-click: Linux ``.desktop`` files,
-and on macOS ``.command`` files, which Finder opens in Terminal.
+and on macOS a small app built with the system's ``osacompile`` (a ``.command`` file,
+which Finder opens in Terminal, when that fails).
+
+The macOS app opens the profile's own terminal straight away, so iTerm2 users get no
+extra Terminal window, and it shows in Launchpad and Spotlight and keeps a place in the
+Dock. It is built on this Mac, so it carries no quarantine mark for Gatekeeper to check.
 
 ``Terminal=false`` when a terminal was chosen: the launcher opens it itself. A
 profile that runs in "this terminal" gets ``Terminal=true`` instead, or a click
@@ -17,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from ornith_launcher.config import atomic_write_text
+from ornith_launcher.system.host import Host
 
 
 def desktop_entry(
@@ -119,6 +125,56 @@ def command_file(profile: str, command: Sequence[str]) -> str:
 
 def command_file_name(profile: str) -> str:
     return f"Ornith {profile}.command"
+
+
+def app_name(profile: str) -> str:
+    return f"Ornith {profile}.app"
+
+
+def applet_lines(profile: str, command: Sequence[str], path: str) -> list[str]:
+    """The app's AppleScript: open the profile in its terminal window, or show why not.
+
+    An app has no terminal of its own and starts with a bare PATH, so it carries the PATH
+    setup ran with (to find the same Python) and asks ``launch`` for a window.
+    """
+    run = shell_command([*command, "launch", profile, "--window"])
+    shell = f"PATH={shlex.quote(path)}; export PATH; exec {run}"
+    title = f"Ornith {profile} could not start"
+    return [
+        f"-- Ornith: {profile}, made by ornith-launcher (unofficial); safe to delete.",
+        "try",
+        f"    do shell script {_applescript_string(shell)}",
+        "on error errorText",
+        f"    display alert {_applescript_string(title)} message errorText as critical",
+        "end try",
+    ]
+
+
+def _applescript_string(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def trash_with_finder(host: Host, path: Path) -> bool:
+    """Ask Finder to move ``path`` to the Trash; macOS asks once to let this app control Finder.
+
+    Once a macOS app has run, App Management stops a terminal without that permission from
+    deleting the files inside it, but Finder may still move the whole app to the Trash.
+    """
+    target = _applescript_string(str(path))
+    result = host.run(
+        ["osascript", "-e", f'tell application "Finder" to delete (POSIX file {target} as alias)'],
+        timeout=120,
+    )
+    return result is not None and result.ok and not path.exists()
+
+
+def write_mac_app(host: Host, path: Path, lines: Sequence[str]) -> bool:
+    """Build the app with ``osacompile``; False if it is missing or failed."""
+    argv = ["osacompile", "-o", str(path)]
+    for line in lines:
+        argv += ["-e", line]
+    result = host.run(argv, timeout=60)
+    return result is not None and result.ok and path.is_dir()
 
 
 def mac_applications_dir(home: Path) -> Path:

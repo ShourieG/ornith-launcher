@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import socket
-import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -74,9 +73,9 @@ from ornith_launcher.download import (
     Downloader,
     DownloadPaused,
     HttpRangeSource,
+    ProgressLine,
     Status,
     Target,
-    format_status,
 )
 from ornith_launcher.errors import OrnithLauncherError
 from ornith_launcher.folders import check_models_folder, ensure_folder, read_mounts
@@ -122,7 +121,13 @@ from ornith_launcher.unfinished import (
     state_progress,
     unfinished_downloads,
 )
-from ornith_launcher.uninstall import EVERYTHING, delete_downloads, has_installs, uninstall_menu
+from ornith_launcher.uninstall import (
+    EVERYTHING,
+    REMOVED,
+    delete_downloads,
+    has_installs,
+    uninstall_menu,
+)
 
 DISCLAIMER_FILE = "disclaimer.txt"
 UNCENSORED_PHRASE = "I understand"
@@ -282,6 +287,7 @@ class Wizard:
     plan: Plan | None = None  # set by run(); the later setup steps reuse it
     browse_state: BrowseState = field(default_factory=BrowseState)
     found_models: list[LocalModel] | None = None  # the quick search, run once
+    menu_shown: bool = False  # the first menu was drawn; later draws start a fresh screen
     now: Callable[[], datetime.datetime] = lambda: datetime.datetime.now(datetime.timezone.utc)
 
     @property
@@ -388,7 +394,15 @@ class Wizard:
             path, self.model_path = self.model_path, None
             return self._use_entered(path, plan)
         while True:
+            if self.menu_shown:
+                # Back from a list, the uninstall menu or a typed path: the menu again on a
+                # fresh screen, not a second copy under the first.
+                self.prompter.new_screen("Models on this machine")
+            searched = self.found_models is None
             models = self._found(plan)
+            if self.menu_shown and not searched and not models:
+                self.say("No Ornith models found in the usual places.")
+            self.menu_shown = True
             unfinished = unfinished_downloads(self.app.paths)
             keys = {"p": "custom model path", "d": "browse and download"}
             if unfinished:
@@ -419,8 +433,11 @@ class Wizard:
                     raise LaunchRequested(name)
                 continue
             if picked == "u":
-                if uninstall_menu(self.app, self.prompter) == EVERYTHING:
+                outcome = uninstall_menu(self.app, self.prompter)
+                if outcome == EVERYTHING:
                     raise Uninstalled()
+                if outcome == REMOVED:
+                    self.prompter.pause("Press Enter to go back to the menu.")
                 # Downloads may be gone and the default setup may have changed.
                 self.found_models = None
                 self.settings = load_settings(self.app.paths)
@@ -873,7 +890,7 @@ class Wizard:
         if view == BEST_FIT and not any_rows and too_big:
             lines.append(
                 f"Nothing that fits this machine matches. {_files(too_big)} "
-                f"{'matches' if too_big == 1 else 'match'} in All models (too big): press a."
+                f"{'matches' if too_big == 1 else 'match'} in All models (too big): press 'a'."
             )
         elif not any_rows:
             lines.append("Nothing matches the search and filters. Press c to clear them.")
@@ -881,7 +898,8 @@ class Wizard:
             these = "file is" if too_big == 1 else "files are"
             them = "it" if too_big == 1 else "them"
             lines.append(
-                f"{too_big} more {these} too big for this machine: a shows {them} in All models."
+                f"{too_big} more {these} too big for this machine. Press 'a' to see {them} in "
+                "All models."
             )
         if view == ALL_MODELS and any_rows:
             lines.append(LIGHTEST_NOTE)
@@ -1096,6 +1114,11 @@ class Wizard:
             lines.append(
                 (FIT_LABELS[c.fit].capitalize(), c.fit_reason[:1].upper() + c.fit_reason[1:])
             )
+        if self.app.os_name == "darwin" and self.plan is not None:
+            gpus = self.plan.report.gpus
+            note = mac_note(c, gpus[0].name if gpus else "")
+            if note:
+                lines.append(("Mac", note))
         if scorer is not None:
             lines.append(("Score", scorer.score(c).summary().removeprefix("score ")))
         badges = [b for b in c.badges if b not in (Level.ESTIMATED.value,)]
@@ -1752,42 +1775,6 @@ def _done_line(target: Target, already: int, seconds: float) -> str:
     return f"Done in {minutes}:{rest:02d} ({fetched / seconds / 1e6:.1f} MB/s){checked}."
 
 
-class ProgressLine:
-    """A progress line redrawn in place on a terminal, or printed every 10% elsewhere."""
-
-    def __init__(self, out=None, min_interval: float = 0.5, indent: str = "") -> None:
-        self.out = out or sys.stdout
-        self.tty = getattr(self.out, "isatty", lambda: False)()
-        self.min_interval = min_interval
-        self.indent = indent
-        self._last = 0.0
-        self._last_step = -1
-        self._shown = False
-
-    def update(self, status: Status) -> None:
-        if self.tty:
-            now = time.monotonic()
-            if now - self._last < self.min_interval and status.done < status.total:
-                return
-            self._last = now
-            self.out.write("\r" + self.indent + format_status(status) + "\x1b[K")
-            self.out.flush()
-        else:
-            step = int(status.done * 10 / status.total) if status.total else 10
-            if step == self._last_step:
-                return
-            self._last_step = step
-            print(self.indent + format_status(status), file=self.out, flush=True)
-        self._shown = True
-
-    def finish(self) -> None:
-        if self.tty and self._shown:
-            self.out.write("\n")
-            self.out.flush()
-        self._shown = False
-        self._last_step = -1
-
-
 # The filter screen's multi-tick rows: field -> (title, "any" label).
 _MULTI_FILTERS = {
     "sizes": ("Model size", "any size"),
@@ -1835,12 +1822,34 @@ def _fit_warning(c: Candidate) -> str:
     return f"; warning: {c.fit.value}{risk}: {c.fit_reason}"
 
 
+def mac_note(c: Candidate, chip: str) -> str:
+    """Apple Silicon advice for one file; "" when there is none. Not measured on a Mac yet."""
+    notes = []
+    if (c.entry.classification.quant or "").upper().startswith("IQ"):
+        notes.append(
+            "I-quants usually generate a little slower on Apple GPUs than a K-quant of "
+            "similar size, such as Q4_K_M"
+        )
+    mmproj = c.entry.repo.best_mmproj() if c.vision else None
+    if mmproj is not None and "BF16" in mmproj.path.upper() and "M1" in chip.split():
+        notes.append("its vision file is BF16, which M1 GPUs may run more slowly")
+    if not notes:
+        return ""
+    text = "; ".join(notes)
+    return f"{text[:1].upper()}{text[1:]} (ESTIMATED)"
+
+
 def recommended_context(contexts: Sequence[Candidate]) -> int | None:
     """The row to recommend: the longest context up to native that fits; else the longest fit.
 
-    Beyond native, YaRN slows down long prompts, so it is never the first advice.
+    Beyond native, YaRN slows down long prompts, so it is never the first advice. A row
+    must also leave its pools' margin (macOS only; zero elsewhere) beyond the reserve.
     """
-    fitting = [i for i, c in enumerate(contexts) if c.fit is Fit.FITS]
+    fitting = [
+        i
+        for i, c in enumerate(contexts)
+        if c.fit is Fit.FITS and all(n.spare >= n.pool.margin for n in c.needs)
+    ]
     native = [i for i in fitting if contexts[i].context <= contexts[i].native]
     if native:
         return max(native, key=lambda i: contexts[i].context)
@@ -1855,10 +1864,11 @@ def memory_notice(c: Candidate, level: Level | None = None) -> str:
     lines = []
     for n in c.needs:
         pool = n.pool
-        text = (
-            f"{pool.name}: {gib(pool.total)} in total. The system uses about "
-            f"{gib(pool.baseline)}, so {gib(pool.usable)} is usable"
-        )
+        text = f"{pool.name}: {gib(pool.total)} in total. The system uses about "
+        text += gib(pool.baseline)
+        if pool.limited:
+            text += f" and the GPU may use at most {gib(pool.usable)}"
+        text += f", so {gib(pool.usable)} is usable"
         if pool.available_now is not None:
             text += f"; {gib(pool.available_now)} is free right now"
         lines.append(

@@ -222,6 +222,8 @@ def open_window(app: App, profile: Profile) -> bool:
     command = [*self_command(), "chat-log", profile.name, IN_WINDOW]
     if not open_in_terminal(app.host, terminal, command, f"Ornith chat log: {profile.name}"):
         app.say(f"Could not open {terminal.name} for the chat log window. {fallback}")
+        if terminal.failure_hint:
+            app.say(terminal.failure_hint)
         return False
     if old is not None:
         app.say("Opened a new chat log window in place of the old one.")

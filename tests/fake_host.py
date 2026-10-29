@@ -18,6 +18,7 @@ class FakeHost:
         programs: Mapping[str, str] | None = None,
         links: Mapping[str, str] | None = None,
         free: Mapping[str, int] | None = None,
+        metal: int | None = None,
     ) -> None:
         self._env = dict(env or {})
         self.files = dict(files or {})
@@ -25,6 +26,7 @@ class FakeHost:
         self.programs = dict(programs or {})
         self.links = dict(links or {})
         self.free = dict(free or {})
+        self.metal = metal  # Metal's working-set limit; None: Metal could not be asked
         self.calls: list[tuple[str, ...]] = []
         self.live: list[tuple[str, ...]] = []
         self.spawned: list[tuple[str, ...]] = []
@@ -78,9 +80,16 @@ class FakeHost:
     def disk_free(self, path: str) -> int | None:
         return self.free.get(path)
 
+    def metal_working_set(self) -> int | None:
+        return self.metal
+
     def run_live(self, argv: Sequence[str]) -> int:
         self.live.append(tuple(argv))
         return self.live_codes.get(tuple(argv), 0)
+
+    def run_shown(self, argv: Sequence[str], waiting: str) -> int:
+        self.waiting = waiting
+        return self.run_live(argv)
 
     def spawn(self, argv: Sequence[str]) -> bool:
         self.spawned.append(tuple(argv))

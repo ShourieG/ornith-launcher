@@ -17,10 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Linux only while the repo is private, to save Actions minutes (macOS and Windows
-        # minutes count extra). Use the second line once the repo is public.
-        os: [ubuntu-latest]
-        # os: [ubuntu-latest, macos-latest, windows-latest]
+        # Linux and macOS; Windows joins when it is supported. macOS minutes count extra
+        # while the repo is private.
+        os: [ubuntu-latest, macos-latest]
         # Oldest supported version and the newest release.
         python: ["3.9", "3.x"]
         exclude:

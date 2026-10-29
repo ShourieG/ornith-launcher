@@ -2,9 +2,10 @@
 
 Uninstall reads this file (``installed.json`` next to the settings) together with
 the profiles, so it only ever removes what the launcher itself created: model
-files it downloaded, desktop icons and applications-menu entries it wrote, and
-the llama.cpp image it pulled (on macOS, the llama.cpp runtime folder it
-downloaded). Anything not recorded here, such as models found elsewhere or an
+files it downloaded, desktop icons and applications-menu entries it wrote, the
+llama.cpp image it pulled (on macOS, the llama.cpp runtime folder it
+downloaded), and the coding tools it installed with their official installers.
+Anything not recorded here, such as models found elsewhere or an
 image that was already on the machine, is never touched.
 """
 
@@ -16,7 +17,7 @@ from pathlib import Path
 from ornith_launcher.config import Paths, atomic_write_json, read_json
 
 LEDGER = "installed.json"
-KINDS = ("downloads", "shortcuts", "images", "runtimes")
+KINDS = ("downloads", "shortcuts", "images", "runtimes", "tools")
 
 
 @dataclass
@@ -25,10 +26,11 @@ class Installed:
     shortcuts: list[str] = field(default_factory=list)  # desktop icons and menu entries
     images: list[str] = field(default_factory=list)  # Docker references the launcher pulled
     runtimes: list[str] = field(default_factory=list)  # native llama.cpp builds it unpacked
+    tools: list[str] = field(default_factory=list)  # coding tools it installed, by binary name
 
     @property
     def empty(self) -> bool:
-        return not (self.downloads or self.shortcuts or self.images or self.runtimes)
+        return not (self.downloads or self.shortcuts or self.images or self.runtimes or self.tools)
 
 
 def ledger_file(paths: Paths) -> Path:

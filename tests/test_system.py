@@ -312,3 +312,42 @@ class ReportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RelayTest(unittest.TestCase):
+    """Installer output shown as it comes, with a spinner only while it is silent."""
+
+    def run_relay(self, *chunks):
+        import os
+        import threading
+        import time
+
+        from ornith_launcher.system.host import relay
+
+        read_end, write_end = os.pipe()
+
+        def installer():
+            for chunk in chunks:
+                if isinstance(chunk, float):
+                    time.sleep(chunk)
+                else:
+                    os.write(write_end, chunk)
+            os.close(write_end)
+
+        writer = threading.Thread(target=installer)
+        writer.start()
+        shown = []
+        relay(read_end, lambda: None, shown.append, "Still working.", quiet=0.3)
+        writer.join()
+        os.close(read_end)
+        return b"".join(shown).decode()
+
+    def test_a_silent_wait_shows_a_spinner_that_clears_before_more_output(self):
+        text = self.run_relay(b"Installing opencode\n", 0.9, b"done\n")
+        self.assertTrue(text.startswith("Installing opencode\n\r  "))
+        self.assertIn(" Still working. (0:00)\x1b[K", text)
+        self.assertIn("\r\x1b[Kdone\n", text)  # the spinner line is wiped first
+
+    def test_a_progress_bar_drawn_in_place_is_not_drawn_over(self):
+        text = self.run_relay(b"[###.......]  30%\r", 0.9, b"[##########] 100%\n")
+        self.assertNotIn("Still working", text)

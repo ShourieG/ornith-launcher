@@ -30,34 +30,49 @@ The first release, for Linux and macOS. Windows support is planned for a later r
 - Contexts from 32k to 1M tokens, each with the memory it needs and a verdict. Past the native 262k the launcher
   sets up YaRN (x2 for 524k, x4 for 1M).
 - A Settings menu for the KV cache, parallel requests, the vision file and the port, each with its memory.
-- Downloads from Hugging Face without a login, pinned to a revision and checked by sha256. Ctrl+C keeps a stopped
-  download to resume later with the same settings, or deletes it. The default models folder is
-  `~/models/ornith-launcher`, and setup lets you pick another.
+- Downloads from Hugging Face without a login, pinned to a revision and checked by sha256. A server address that
+  does not answer within 10 seconds is skipped for the next one, and tried last for the rest of the download.
+  Ctrl+C keeps a stopped download to resume later with the same settings, or deletes it. The default models folder
+  is `~/models/ornith-launcher`, and setup lets you pick another.
 - On Linux the server runs in Docker from a llama.cpp b11552 image pinned by digest (CUDA, ROCm, Vulkan, Intel
   or CPU). On macOS it runs the llama.cpp b11552 release build without Docker, pinned by sha256 and unpacked only
-  after every archive entry is checked, with `caffeinate` keeping the Mac awake. Servers listen on 127.0.0.1 only,
+  after every archive entry is checked, with its official GitHub release address and a progress line shown while
+  it downloads, and `caffeinate` keeping the Mac awake. Servers listen on 127.0.0.1 only,
   and llama.cpp's own memory check runs before the first launch.
 - A server window with the server's log and a status line, where Ctrl+C asks before stopping the server. An
   optional desktop icon and applications menu entry start a model with a double-click (`.desktop` files on Linux,
-  marked trusted on GNOME; `.command` files on macOS), and `setup --shortcuts NAME` adds them later.
+  marked trusted on GNOME; on macOS small apps built with `osacompile`, which open the chosen terminal directly
+  and show in Launchpad and Spotlight, with `.command` files as the fallback), and `setup --shortcuts NAME` adds
+  them later.
+  On macOS, iTerm2 windows open through iTerm2's AppleScript after one Automation question, so iTerm2 does not
+  ask "OK to run" for every window.
 - An optional chat log window that shows each request and the reply as it streams, through a small proxy on the
   model's port. It keeps the last 10 requests in memory and writes nothing to disk.
 - Claude Code and OpenCode connections, each optional, with the official installers offered only after a yes.
-  Claude Code gets `ornith-claude` and `ornith-claude-NAME` wrappers, with a fix applied to a copy of the chat
-  template so mid-conversation system messages work, and with `CLAUDE_CODE_AUTO_MODE_SERVER=0`, since llama.cpp
-  cannot run auto mode's server-side checks; your own Claude Code settings are not changed. OpenCode gets a
-  provider entry after a backup of its config, declaring image input when vision is on, marking the model as a
-  reasoning model with a "no-thinking" variant, and, if you agree, making it the default model. Setup also adds a
-  short `show-pictures.md` to OpenCode's instructions so models can draw charts in the chat, and says so before
-  you pick OpenCode. Setup can open the connected tools in their own windows at each launch.
+  Setup records a tool it installs, names its command (`claude`, `opencode`), checks that a new terminal window
+  finds it and otherwise prints the PATH line, says beforehand when its installer may sit silent, shows a spinner
+  with the time so far whenever the installer prints nothing, and goes on with its questions on a fresh screen
+  afterwards. Claude Code gets `ornith-claude` and `ornith-claude-NAME` wrappers, with a fix applied to a copy of
+  the chat template so mid-conversation system messages work, and with `CLAUDE_CODE_AUTO_MODE_SERVER=0`, since
+  llama.cpp cannot run auto mode's server-side checks; your own Claude Code settings are not changed. OpenCode
+  gets a provider entry after a backup of its config, declaring image input when vision is on, marking the model
+  as a reasoning model with a "no-thinking" variant, and, if you agree, making it the default model. Setup also
+  adds a short `show-pictures.md` to OpenCode's instructions so models can draw charts in the chat, and says so
+  before you pick OpenCode. Setup can open the connected tools in their own windows at each launch (the default).
 - Commands: `setup` (with `--repair`, `--integrations` and `--shortcuts`), `launch`, `stop`, `status`, `list`,
   `monitor`, `logs`, `chat-log`, `scan`, `doctor`, `remove`, `uninstall` and `bench`. `doctor` is read-only and
   prints the fix for each problem it finds.
-- `uninstall` removes one setup (with or without its model or the model server), all setups, unfinished
-  downloads, or everything the launcher created. It removes only what the launcher recorded as its own, and
-  puts back OpenCode's previous default model unless you picked another one since.
+- `uninstall` removes one setup or all setups (each with or without their models and the llama.cpp server),
+  unfinished downloads, the coding tools setup installed (their own settings and history only if you ask), or
+  everything the launcher created. It removes only what the launcher recorded as its own, and
+  puts back OpenCode's previous default model unless you picked another one since. Each question starts on a
+  fresh screen, and after a removal setup waits for Enter before going back to its menu.
 - `bench`: a long-context retrieval test and llama.cpp perplexity, pausing when the GPU reaches 80 °C (Linux).
   `docs/BENCHMARKS.md` holds the DGX Spark results, each labelled TESTED, INFERRED or ESTIMATED.
-- A first-run disclaimer, shown again when its version changes; Apache-2.0 licence, notice, credits, security
-  policy and contributing guide (DCO sign-off). CI runs the unit tests on Linux with Python 3.9 and the latest
-  Python, plus ruff and shellcheck.
+- Documentation: the README gives an overview, what has been tested and a quick start, and `docs/GUIDE.md`
+  describes every screen, key, option and file, with the Linux and macOS details, and how to weigh model size,
+  quant and context against each other, with links to the published studies behind it.
+- A first-run disclaimer, shown again when its version changes; GPL-3.0-or-later licence with section 7 terms in
+  `NOTICE` (keep the attribution, mark modified versions, no rights in the name); credits, security policy and
+  contributing guide (DCO sign-off). CI runs the unit tests on Linux and macOS with Python 3.9 and
+  the latest Python, plus ruff and shellcheck.

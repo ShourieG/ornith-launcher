@@ -32,6 +32,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO, Union
 
 from ornith_launcher.config import Paths, atomic_write_json, read_json
+from ornith_launcher.download import ProgressLine, Status
 from ornith_launcher.pins import NativeAsset, NativeBuild, Pins, load_pins
 from ornith_launcher.profiles import Profile
 from ornith_launcher.runtime.api import ServerApi, ServerError
@@ -150,10 +151,10 @@ def _single_folder(path: Path) -> Path:
     return entries[0] if len(entries) == 1 and entries[0].is_dir() else path
 
 
-def _download(asset: NativeAsset, dest: Path) -> None:
+def _download(asset: NativeAsset, dest: Path, on_progress: Callable[[Status], None]) -> None:
     from ornith_launcher.download import Downloader, HttpRangeSource, Target
 
-    Downloader(source=HttpRangeSource(), segments=1).fetch(
+    Downloader(source=HttpRangeSource(), segments=1, on_progress=on_progress).fetch(
         Target(asset.url, dest, asset.size, asset.sha256)
     )
 
@@ -234,7 +235,8 @@ class NativeRuntime(ServerApi):
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     out: TextIO = field(default_factory=lambda: sys.stdout)
-    fetch: Callable[[NativeAsset, Path], None] = _download  # downloads and checks one archive
+    # Downloads and checks one archive, reporting its progress.
+    fetch: Callable[[NativeAsset, Path, Callable[[Status], None]], None] = _download
     pick_port: Callable[[], int] = free_port
 
     # How the rest of the launcher names what this backend runs.
@@ -312,7 +314,13 @@ class NativeRuntime(ServerApi):
             staging.mkdir(parents=True)
             for asset in build.assets:
                 archive = downloads / asset.name
-                self.fetch(asset, archive)
+                # Say where it comes from: the llama.cpp project's own release, as pinned.
+                print(f"  From the official llama.cpp release: {asset.url}", file=self.out)
+                progress = ProgressLine(self.out, indent="  ")
+                try:
+                    self.fetch(asset, archive, progress.update)
+                finally:
+                    progress.finish()
                 from ornith_launcher.download import sha256_file
 
                 if sha256_file(archive) != asset.sha256:
@@ -320,6 +328,7 @@ class NativeRuntime(ServerApi):
                         f"{asset.name} does not match its pinned sha256",
                         hint="Run the same command again to download it afresh.",
                     )
+                print("  Matches its pinned sha256.", file=self.out, flush=True)
                 unpack(archive, staging)
             folder = _single_folder(staging)
             if not (folder / SERVER).is_file():

@@ -11,4 +11,3 @@ ornith-launcher is an unofficial project that builds on the work of others. None
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) by ggml.org | The inference server, run from its official Docker images on Linux and its release build on macOS | MIT |
 | [Hugging Face](https://huggingface.co) | Model hosting and the public API the catalog reads | Hugging Face terms of service |
 
-The code was developed with Claude Code.

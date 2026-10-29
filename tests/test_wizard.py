@@ -452,9 +452,27 @@ class WizardTest(unittest.TestCase):
         self.assertEqual(titles[-1], "What next?")
         after_main = titles[titles.index("What next?", 1) + 1]
         self.assertEqual(after_main, "Suggested for this machine:")  # browsing starts afresh
-        # The quick search ran once; coming back does not repeat it.
+        # The quick search ran once; coming back shows its result again on a fresh screen.
         self.assertEqual(self.out.getvalue().count("Looking for Ornith models"), 1)
-        self.assertEqual(self.out.getvalue().count("No Ornith models found"), 1)
+        self.assertEqual(self.out.getvalue().count("No Ornith models found"), 3)
+
+    def test_coming_back_to_the_first_menu_starts_a_new_screen(self):
+        screens = []
+        original = PlainPrompter.new_screen
+
+        def record(prompter, title):
+            screens.append(title)
+            original(prompter, title)
+
+        with mock.patch.object(PlainPrompter, "new_screen", record):
+            # browse, back from the suggestions, browse, back again, quit
+            self.walk(["", "d", "esc", "d", "esc", "q"])
+        # The first menu sits under the system check; each return clears the screen
+        # instead of printing a second menu below the first.
+        self.assertEqual(
+            screens,
+            ["Checking this machine...", "Models on this machine", "Models on this machine"],
+        )
 
     def test_back_from_a_local_model_shows_the_first_menu(self):
         settings = Settings(disclaimer_version=disclaimer_text()[0])
@@ -498,6 +516,27 @@ class WizardTest(unittest.TestCase):
         titles, _ = self.walk(["u", "esc", "q"])
         self.assertIn("Uninstall or remove setups", self.out.getvalue())
         self.assertEqual(titles, ["What next?", "Uninstall", "What next?"])
+
+    def test_after_a_removal_the_menu_starts_a_new_screen(self):
+        from ornith_launcher.profiles import save_profile
+        from tests.runtime_fixtures import profile
+
+        self.walk(["", "q"])
+        save_profile(self.app.paths, profile(self.home, name="nine"))
+        paused = []
+        original = PlainPrompter.pause
+
+        def pause(prompter, message):
+            paused.append(message)
+            return original(prompter, message)
+
+        with mock.patch.object(PlainPrompter, "pause", pause):
+            # uninstall, one setup, "nine", setup only, confirm, Enter, then quit
+            self.walk(["u", "1", "1", "", "y", "", "q"])
+        self.assertEqual(paused, ["Press Enter to go back to the menu."])
+        text = self.out.getvalue()
+        after = text[text.index("  Removed the setup nine.") :]
+        self.assertIn("\nModels on this machine\n", after)
 
     def test_launch_a_model_from_the_first_menu(self):
         from ornith_launcher import launch
@@ -826,7 +865,8 @@ class WizardTest(unittest.TestCase):
         self.assertIn("Best fit list  b", self.out.getvalue())
         self.assertIn("Back           Esc", self.out.getvalue())
         self.assertIn(
-            "3 more files are too big for this machine: a shows them", self.out.getvalue()
+            "3 more files are too big for this machine. Press 'a' to see them in All models.",
+            self.out.getvalue(),
         )
 
     def test_a_search_narrows_both_lists_and_never_reorders(self):
@@ -852,7 +892,7 @@ class WizardTest(unittest.TestCase):
         text = self.out.getvalue()
         self.assertIn("Filters (9 files match; 8 of them fit this machine):", text)
         self.assertIn("Filters: size 35B or 122B. Search: none.", text)
-        self.assertIn("1 more file is too big for this machine: a shows it", text)
+        self.assertIn("1 more file is too big for this machine. Press 'a' to see it", text)
         self.assertRegex(text, r"2\s+\[x\] 35B\s+7")
 
     def test_version_and_quant_pickers_tick_and_c_clears(self):
@@ -879,7 +919,7 @@ class WizardTest(unittest.TestCase):
         self.assertTrue(titles[-1].startswith("Best fit for this machine (0 files;"))
         self.assertIn(
             "Nothing that fits this machine matches. 1 file matches in All models (too big): "
-            "press a.",
+            "press 'a'.",
             self.out.getvalue(),
         )
 
@@ -1021,6 +1061,36 @@ class MemoryColumnsTest(unittest.TestCase):
             with self.subTest(kind):
                 self.assertEqual(memory_cells(self.candidate((self.pool, need))), cells)
 
+    def test_free_after_counts_memory_other_apps_can_give_back(self):
+        from ornith_launcher.wizard import memory_cells
+
+        # 100 GiB usable once other apps close, though they hold 30 GiB of it now.
+        busy = Pool(PoolKind.UNIFIED, "Unified", 120 * self.GIB, 20 * self.GIB, 70 * self.GIB)
+        self.assertEqual(memory_cells(self.candidate((busy, 60))), ("25.0 GiB", "none", "40.0 GiB"))
+
+    def test_a_mac_recommends_a_context_that_leaves_a_margin(self):
+        from types import SimpleNamespace
+
+        from ornith_launcher.planner.rank import Fit, PoolNeed
+        from ornith_launcher.wizard import recommended_context
+
+        def rows(pool):
+            # 20 GiB usable, a plan of 17 GiB: 128k leaves 2.5 GiB, 262k only 0.5 GiB.
+            return [
+                SimpleNamespace(
+                    fit=Fit.FITS,
+                    context=k,
+                    native=262144,
+                    needs=[PoolNeed(pool, int(g * self.GIB))],
+                )
+                for k, g in ((131072, 14.5), (262144, 16.5))
+            ]
+
+        mac = Pool(PoolKind.UNIFIED, "Unified", 28 * self.GIB, 8 * self.GIB, margin=self.GIB)
+        linux = Pool(PoolKind.UNIFIED, "Unified", 28 * self.GIB, 8 * self.GIB)
+        self.assertEqual(recommended_context(rows(mac)), 0)
+        self.assertEqual(recommended_context(rows(linux)), 1)
+
     def test_a_split_machine_shows_its_fullest_pool(self):
         from ornith_launcher.wizard import memory_cells
 
@@ -1043,8 +1113,37 @@ class MemoryColumnsTest(unittest.TestCase):
         self.assertIn("Each row shows its fullest memory pool.", split)
         self.assertNotIn("All memory figures", split)
 
+    def test_the_notice_names_a_gpu_limit_below_what_the_system_leaves(self):
+        from ornith_launcher.wizard import memory_notice
+
+        mac = Pool(PoolKind.UNIFIED, "Unified", 32 * self.GIB, 8 * self.GIB, limit=21 * self.GIB)
+        text = memory_notice(self.candidate((mac, 10)))
+        self.assertIn("32.0 GiB in total. The system uses about 8.0 GiB", text)
+        self.assertIn("the GPU may use at most 21.0 GiB, so 21.0 GiB is usable", text)
+        self.assertNotIn("at most", memory_notice(self.candidate((self.pool, 80))))
+
 
 class PieceTest(unittest.TestCase):
+    def test_mac_note_for_i_quants_and_bf16_vision_on_m1(self):
+        from types import SimpleNamespace
+
+        from ornith_launcher.wizard import mac_note
+
+        def file(quant, vision=False, mmproj="mmproj-BF16.gguf"):
+            repo = SimpleNamespace(best_mmproj=lambda: SimpleNamespace(path=mmproj))
+            entry = SimpleNamespace(classification=SimpleNamespace(quant=quant), repo=repo)
+            return SimpleNamespace(entry=entry, vision=vision)
+
+        self.assertEqual(mac_note(file("Q4_K_M"), "Apple M1 Max"), "")
+        self.assertIn("I-quants usually generate a little slower", mac_note(file("IQ4_XS"), ""))
+        self.assertTrue(mac_note(file("IQ4_XS"), "").endswith("(ESTIMATED)"))
+        bf16 = mac_note(file("Q8_0", vision=True), "Apple M1 Max")
+        self.assertEqual(
+            bf16, "Its vision file is BF16, which M1 GPUs may run more slowly (ESTIMATED)"
+        )
+        self.assertEqual(mac_note(file("Q8_0", vision=True), "Apple M2 Max"), "")
+        self.assertEqual(mac_note(file("Q8_0", vision=True, mmproj="mmproj-F16.gguf"), "M1"), "")
+
     def test_yes_no_questions_name_their_default(self):
         prompts = []
         out = io.StringIO()
@@ -1063,9 +1162,23 @@ class PieceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             app = mock.Mock()
             prompter = PlainPrompter(read_line=lambda prompt: "", out=io.StringIO())
+            saved = profile(Path(tmp))
+            saved.integrations["desktop_copy"] = "/Desktop/Ornith nine.app"
             with mock.patch.object(setup_profile, "Launcher") as launcher:
-                self.assertEqual(setup_profile.launch_now(app, prompter, profile(Path(tmp))), 0)
+                with mock.patch.object(PlainPrompter, "_clear_for_quit") as clear:
+                    self.assertEqual(setup_profile.launch_now(app, prompter, saved), 0)
             launcher.assert_not_called()  # Enter alone does not start the server
+            # Setup ends on a clear screen that says how to start the model.
+            clear.assert_called_once()
+            self.assertEqual(
+                prompter.out.getvalue().splitlines(),
+                [
+                    "",  # before the question, as every question has
+                    f"Saved the profile {saved.name}.",
+                    f"Start it any time with: ornith-launcher launch {saved.name}",
+                    "Or double-click its launch icon: /Desktop/Ornith nine.app",
+                ],
+            )
 
     def test_settings_round_trip_ignores_unknown_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1168,6 +1281,9 @@ class PieceTest(unittest.TestCase):
                 "  Quit      q",
             ],
         )
+        # Actions are plain text: dim is only for rows that cannot be chosen.
+        self.assertEqual(lines[-4:], plain[-4:])
+        self.assertIn("\x1b[2m", lines[6])  # the "off" row
         self.assertIn(
             "Up/Down", render_list("T", ["N"], [Choice(("x",))], 0, 0, {}, 60, 20, "Up/Down")[-3]
         )
@@ -1417,6 +1533,29 @@ class PieceTest(unittest.TestCase):
         with self.assertRaises(Cancelled):
             self.full_screen_keys("eof").text("Path")
         self.assertEqual(BACK, "esc")
+
+    def test_yes_no_questions_are_bold_where_the_terminal_shows_it(self):
+        from ornith_launcher.ui.plain import text_width
+
+        prompter = self.full_screen_keys("y", "enter")
+        self.assertTrue(prompter.confirm("Delete these?", default=False))
+        self.assertIn("\x1b[1mDelete these?\x1b[0m [y/N] (default: no) ", prompter.out.getvalue())
+        # The bold codes take no columns, so the answer keeps its full room.
+        self.assertEqual(text_width("\x1b[1mDelete these?\x1b[0m"), len("Delete these?"))
+        plain = io.StringIO()
+        asked = []
+        PlainPrompter(read_line=lambda prompt: asked.append(prompt) or "y", out=plain).confirm("Q?")
+        self.assertEqual(asked, ["Q? [Y/n] (default: yes) "])  # pipes, logs, --plain: no codes
+
+    def test_bold_words_do_not_shorten_a_wrapped_line(self):
+        from ornith_launcher.ui.plain import text_width, wrap_styled
+
+        text = "\x1b[1mOpenCode\x1b[0m " + "word " * 30
+        lines = wrap_styled(text.strip(), 40, "  ")
+        self.assertTrue(all(text_width(line) <= 40 for line in lines))
+        self.assertEqual(text_width(lines[0]), 40)  # "  OpenCode" and 6 words: full width
+        self.assertTrue(all(line.startswith("  ") for line in lines))
+        self.assertEqual(wrap_styled("", 40), [])
 
     def test_a_long_answer_scrolls_and_a_long_question_gets_its_own_line(self):
         from ornith_launcher.ui.tui import _tail

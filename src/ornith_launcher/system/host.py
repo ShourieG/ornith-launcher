@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import glob as _glob
 import os
+import select
 import shutil
 import signal
 import subprocess
-from collections.abc import Iterator, Mapping, Sequence
+import sys
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -49,8 +52,18 @@ class Host(Protocol):
     def disk_free(self, path: str) -> int | None:
         """Free bytes on the file system holding ``path``, or None if unknown."""
 
+    def metal_working_set(self) -> int | None:
+        """Metal's working-set limit in bytes on a Mac; None elsewhere or if unknown."""
+
     def run_live(self, argv: Sequence[str]) -> int:
         """Run a command with its output shown to the user (e.g. docker pull progress)."""
+
+    def run_shown(self, argv: Sequence[str], waiting: str) -> int:
+        """``run_live``, plus a spinner with ``waiting`` while the command prints nothing.
+
+        For installers that sit silent while they connect or download, so the screen does
+        not look frozen. The command's own output and progress bars are shown unchanged.
+        """
 
     def spawn(self, argv: Sequence[str]) -> bool:
         """Start a detached process (e.g. a terminal window); False if it could not start."""
@@ -151,11 +164,59 @@ class LocalHost:
         except OSError:
             return None
 
+    def metal_working_set(self) -> int | None:
+        if sys.platform != "darwin":
+            return None
+        from ornith_launcher.system import macos
+
+        return macos.read_working_set()
+
     def run_live(self, argv: Sequence[str]) -> int:
         try:
             return subprocess.call(list(argv), env=self._env)
         except (FileNotFoundError, PermissionError):
             return 127
+
+    def run_shown(self, argv: Sequence[str], waiting: str) -> int:
+        try:
+            import fcntl
+            import pty
+            import termios
+        except ImportError:  # Windows: no pseudo-terminals
+            return self.run_live(argv)
+        if not sys.stdout.isatty():
+            return self.run_live(argv)  # a log or pipe: no spinner to draw
+        master, slave = pty.openpty()
+        try:
+            size = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, size)  # its progress bars fit the window
+        except OSError:
+            pass
+        try:
+            # Same process group, so Ctrl+C in this terminal reaches it too. No input: the
+            # installers it runs ask nothing, and a question would otherwise wait forever.
+            process = subprocess.Popen(
+                list(argv), env=self._env, stdin=subprocess.DEVNULL, stdout=slave, stderr=slave
+            )
+        except (FileNotFoundError, PermissionError):
+            os.close(master)
+            return 127
+        finally:
+            os.close(slave)
+        out = sys.stdout.buffer
+
+        def write(data: bytes) -> None:
+            out.write(data)
+            out.flush()
+
+        try:
+            relay(master, process.poll, write, waiting)
+            return process.wait()
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait()
+            os.close(master)
 
     def spawn(self, argv: Sequence[str]) -> bool:
         # A new session, so terminals that stay in the foreground (Konsole) do not block us.
@@ -234,3 +295,52 @@ class LocalHost:
         except (FileNotFoundError, PermissionError):
             return None
         return _ProcessLines(process)
+
+
+# Seconds without output before the spinner shows, and the spinner's frames.
+QUIET = 2.0
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def relay(
+    fd: int,
+    poll: Callable[[], int | None],
+    write: Callable[[bytes], None],
+    waiting: str,
+    clock: Callable[[], float] = time.monotonic,
+    quiet: float = QUIET,
+) -> None:
+    """Copy a command's output from ``fd`` to ``write`` until it ends.
+
+    While it prints nothing for ``quiet`` seconds, and its last line is complete (a
+    progress bar drawn in place is not), a spinner line shows ``waiting`` and the time
+    since the start; it is cleared before the command's next output.
+    """
+    start = last = clock()
+    at_line_start, shown, frame = True, False, 0
+    while True:
+        ready, _, _ = select.select([fd], [], [], 0.2)
+        if ready:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:  # Linux: the command closed its end of the terminal
+                data = b""
+            if not data:
+                break
+            if shown:
+                write(b"\r\x1b[K")
+                shown = False
+            write(data)
+            at_line_start = data.endswith(b"\n")
+            last = clock()
+        elif poll() is not None:
+            break
+        elif at_line_start and clock() - last >= quiet:
+            elapsed = int(clock() - start)
+            spin = SPINNER[frame % len(SPINNER)]
+            frame += 1
+            line = f"\r  {spin} {waiting} ({elapsed // 60}:{elapsed % 60:02d})\x1b[K"
+            write(line.encode("utf-8"))
+            shown = True
+    if shown:
+        write(b"\r\x1b[K")

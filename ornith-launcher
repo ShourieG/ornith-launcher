@@ -1,6 +1,8 @@
 #!/bin/sh
 # ornith-launcher (unofficial): finds Python 3.9+ and runs the package from this
 # checkout's src/ folder. POSIX sh only, because macOS ships bash 3.2.
+# Copyright 2026 Shourie Ganguly. GPL-3.0-or-later (see LICENSE), with additional terms
+# under its section 7 in NOTICE; they apply to every file in this project.
 set -eu
 
 # Prints the folder part of a path, or "." when the path has no slash.

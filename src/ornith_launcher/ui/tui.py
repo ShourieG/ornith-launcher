@@ -245,7 +245,8 @@ def render_list(
     lines.append(f"  {BOLD}Actions{RESET}")
     lines.append("")
     actions = footer(keys, arrows, click, pages)
-    lines.extend(f"{DIM}  {clip(text, width - 2)}{RESET}" for text in actions)
+    # Plain, not dim: dim marks rows that cannot be chosen, and every action here works.
+    lines.extend(f"  {clip(text, width - 2)}" for text in actions)
     return lines
 
 

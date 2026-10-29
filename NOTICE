@@ -1,7 +1,30 @@
 ornith-launcher
 Copyright 2026 Shourie Ganguly
 
-Licensed under the Apache License, Version 2.0 (see LICENSE).
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License in LICENSE for more details.
+
+Additional terms under section 7 of the GNU General Public License, version 3. They
+apply to ornith-launcher and to every work based on it:
+
+  1. Attribution (section 7(b)). Every copy and every modified version must keep
+     this NOTICE file, including the copyright line above and the statement below
+     that ornith-launcher is an unofficial project.
+
+  2. Origin (section 7(c)). A modified version must be marked in a reasonable way
+     as different from the original: in its name, its --version output and its
+     documentation. It must not be presented as ornith-launcher itself, or as made,
+     reviewed or endorsed by the authors of ornith-launcher.
+
+  3. Names (sections 7(d) and 7(e)). This licence grants no right to use the name
+     "ornith-launcher", or the names of its authors, to name, publicise or endorse a
+     modified version, and no rights under trademark law in that name. Saying
+     truthfully that a work is based on ornith-launcher is always allowed.
 
 ornith-launcher is an unofficial project and is not affiliated with, endorsed by,
 or sponsored by Ornith AI, Anthropic, Anomaly/OpenCode, Hugging Face, Docker,

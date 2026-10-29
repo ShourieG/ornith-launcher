@@ -1,6 +1,6 @@
 # Disclaimer
 
-Version 2 (2026-10-29). ornith-launcher shows this text on first run and asks again whenever the version changes.
+Version 3 (2026-10-29). ornith-launcher shows this text on first run and asks again whenever the version changes.
 
 ornith-launcher is an unofficial project. It is not affiliated with, endorsed by, or sponsored by Ornith AI,
 Anthropic, Anomaly/OpenCode, Hugging Face, Docker, NVIDIA, AMD, Intel or ggml.org.
@@ -8,7 +8,8 @@ Anthropic, Anomaly/OpenCode, Hugging Face, Docker, NVIDIA, AMD, Intel or ggml.or
 ## No warranty
 
 The software is provided "AS IS", without warranties or conditions of any kind, and the authors are not liable for
-any damages arising from its use. See sections 7 and 8 of the Apache License 2.0 in [LICENSE](LICENSE).
+any damages arising from its use. See sections 15 and 16 of the GNU General Public License, version 3, in
+[LICENSE](LICENSE).
 
 ## Models
 

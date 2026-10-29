@@ -1,19 +1,21 @@
 """Undoing what the launcher created: one profile (``remove``), or the uninstall menu.
 
 The menu lists only what applies: one setup or all setups once a setup exists,
-unfinished downloads while a stopped download is left (``unfinished.py``), and
-everything.
+unfinished downloads while a stopped download is left (``unfinished.py``), the
+coding tools the launcher installed, and everything.
 
 Only what ornith-launcher itself made is ever removed, and that is read from its
 own files: the profiles, and the record in ``installed.py`` (downloads, desktop
-icons, applications-menu entries, pulled images, and on macOS the llama.cpp
-runtime it downloaded). Model files found on the machine or entered by the user
-are never deleted or offered for deletion.
+icons, applications-menu entries, pulled images, on macOS the llama.cpp runtime
+it downloaded, and Claude Code or OpenCode when the launcher installed them). Model
+files found on the machine or entered by the user are never deleted or offered for
+deletion. A coding tool the user installed some other way is never offered either.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +24,13 @@ from ornith_launcher import chat_log
 from ornith_launcher.app import App
 from ornith_launcher.installed import downloaded_here, forget, load_installed
 from ornith_launcher.integrations import opencode
+from ornith_launcher.integrations.installers import (
+    INSTALLERS,
+    Installer,
+    uninstall,
+    uninstall_command,
+)
+from ornith_launcher.integrations.shortcuts import trash_with_finder
 from ornith_launcher.profiles import Profile, delete_profile, list_profiles, load_profile
 from ornith_launcher.runtime.native import Runtime
 from ornith_launcher.settings import load_settings, save_settings
@@ -43,6 +52,11 @@ def created_files(profile: Profile) -> list[Path]:
         if integrations.get(key):
             paths.append(Path(integrations[key]))
     return paths
+
+
+def server_log(app: App, profile: Profile) -> Path:
+    """The server log a native runtime (macOS) keeps for this profile; Docker keeps none here."""
+    return app.paths.logs / f"{profile.name}.log"
 
 
 def tool_entries(profile: Profile) -> list[str]:
@@ -108,9 +122,8 @@ def remove_created(app: App, profile: Profile) -> None:
         remove_claude_files(profile.integrations["claude_code"])
         app.say("  Deleted the Claude Code wrapper.")
     for path in created_files(profile):
-        if path.exists() or path.is_symlink():
-            path.unlink()
-            app.say(f"  Deleted {path}")
+        if (path.exists() or path.is_symlink()) and not _delete(app, path):
+            continue  # still recorded, so "Remove everything" offers it again
         forget(app.paths, "shortcuts", str(path))
     if profile.integrations.get("opencode"):
         from ornith_launcher.integrations.opencode import remove_entry
@@ -119,6 +132,10 @@ def remove_created(app: App, profile: Profile) -> None:
     template = profile.runtime.template
     if template.source == "patched" and template.file:
         Path(template.file).unlink(missing_ok=True)
+    log = server_log(app, profile)
+    if log.exists():
+        log.unlink()
+        app.say("  Deleted the server log.")
 
 
 def remove_profile(app: App, profile: Profile, runtime: Runtime, prompter: PlainPrompter) -> None:
@@ -157,11 +174,18 @@ class Removal:
     kept_by_choice: list[Path] = field(default_factory=list)  # downloaded, but the user keeps them
     images: list[str] = field(default_factory=list)  # Docker references or runtimes we fetched
     folders: list[Path] = field(default_factory=list)  # our own folders (everything only)
+    tools: list[str] = field(default_factory=list)  # coding tools we installed, by binary name
+    tool_settings: bool = False  # their own settings and history go too (only when asked)
 
     @property
     def empty(self) -> bool:
         return not (
-            self.profiles or self.model_files or self.shortcuts or self.images or self.folders
+            self.profiles
+            or self.model_files
+            or self.shortcuts
+            or self.images
+            or self.folders
+            or self.tools
         )
 
     @property
@@ -228,6 +252,7 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
     while True:
         names = list_profiles(app.paths)
         unfinished = unfinished_downloads(app.paths)
+        tools = installed_tools(app)
         # Only what applies is listed: a greyed-out row would look like a dead button.
         options = []
         if names:
@@ -236,7 +261,13 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
                     "one",
                     ("Remove one setup", "choose its setup, launch icons, model or model server"),
                 ),
-                ("all", ("Remove all setups", "the same for every setup")),
+                (
+                    "all",
+                    (
+                        "Remove all setups",
+                        "every setup, with their models, llama.cpp or everything if you like",
+                    ),
+                ),
             ]
         if unfinished:
             stopped = sum(u.done for u in unfinished) / GIB
@@ -250,16 +281,28 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
                     ),
                 )
             )
-        options.append(
-            (
-                "everything",
+        if tools:
+            options.append(
                 (
-                    "Remove everything",
-                    f"all setups, every model it downloaded, the {runtime.server_noun} it "
-                    f"{runtime.fetched} and its own settings",
-                ),
+                    "tools",
+                    (
+                        "Remove coding tools",
+                        f"{_joined([t.name for t in tools])}, which ornith-launcher installed; "
+                        "their own settings and history stay unless you ask",
+                    ),
+                )
             )
-        )
+        if not names:  # with setups, "Remove all setups" offers it
+            options.append(
+                (
+                    "everything",
+                    (
+                        "Remove everything",
+                        f"every model it downloaded, the {runtime.server_noun} it "
+                        f"{runtime.fetched} and its own settings",
+                    ),
+                )
+            )
         picked = prompter.choose(
             "Uninstall",
             ["Option", "Removes"],
@@ -273,6 +316,12 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
         if picked == BACK:
             return NOTHING
         action = options[int(picked)][0]
+        servers: list[str] = []
+        if action == "all":
+            servers = fetched_servers(app, runtime)
+            action = _choose_all_parts(prompter, runtime, servers)
+            if action is None:
+                continue
         everything = action == "everything"
         if action == "unfinished":
             removal = _choose_unfinished(prompter, unfinished)
@@ -289,15 +338,30 @@ def uninstall_menu(app: App, prompter: PlainPrompter) -> str:
             removal = plan_removal(app, [profile], keep_models=not model) if setup else Removal()
             if server:
                 removal.images = [profile.runtime.image]
-        elif action == "all":
-            keep = _keep_models(prompter)
-            if keep is None:
+        elif action == "tools":
+            chosen = _choose_tools(prompter, tools)
+            if chosen is None:
                 continue
+            removal = Removal(tools=[t.binary for t in chosen])
+            prompter.new_screen("Uninstall: coding tools")
+            removal.tool_settings = _delete_tool_settings(prompter, chosen)
+        elif action in ("setups", "models", "server"):
             profiles = [load_profile(app.paths, name) for name in names]
-            removal = plan_removal(app, profiles, keep_models=keep)
+            removal = plan_removal(app, profiles, keep_models=action == "setups")
+            if action == "server":
+                removal.images = servers
         else:
             profiles = [load_profile(app.paths, name) for name in names]
             removal = plan_removal(app, profiles, everything=everything)
+            if tools:
+                prompter.new_screen("Uninstall: coding tools")
+            # Kept unless asked: people often go on using a coding tool without the launcher.
+            if tools and prompter.confirm(
+                f"Also remove {_joined([t.name for t in tools])}, which ornith-launcher installed?",
+                default=False,
+            ):
+                removal.tools = [t.binary for t in tools]
+                removal.tool_settings = _delete_tool_settings(prompter, tools)
         if not _confirm(app, prompter, removal, runtime):
             continue
         apply_removal(app, removal, runtime)
@@ -317,10 +381,19 @@ def apply_removal(app: App, removal: Removal, runtime: Runtime) -> None:
             save_settings(app.paths, settings)
         app.say(f"  Removed the setup {profile.name}.")
     for path in removal.shortcuts:
-        if path.exists():
-            path.unlink()
-            app.say(f"  Deleted {path}")
+        if path.exists() and not _delete(app, path):
+            continue
         forget(app.paths, "shortcuts", str(path))
+    for binary in removal.tools:
+        installer = INSTALLERS[binary]
+        keep = not removal.tool_settings
+        problem = uninstall(installer, app.host, app.home, keep_settings=keep)
+        if problem:
+            app.say(f"  Could not remove {installer.name} ({problem}).")
+            app.say(f"    Remove it later with: {uninstall_command(installer, keep)}")
+            continue
+        forget(app.paths, "tools", binary)
+        app.say(f"  Removed {installer.name} (the {binary} command).")
     if removal.model_files:
         delete_downloads(app, removal.model_files)
         app.say(f"  Deleted {len(removal.model_files)} downloaded model file(s).")
@@ -355,6 +428,35 @@ def apply_removal(app: App, removal: Removal, runtime: Runtime) -> None:
         app.say("ornith-launcher's files are gone. Delete this folder to remove the tool itself.")
 
 
+def _delete(app: App, path: Path) -> bool:
+    """Delete a launch icon (a file, or a macOS app, which is a folder) and say so.
+
+    Never raises: a file that cannot go is named with the way to remove it, and the rest
+    of the removal goes on.
+    """
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except OSError as exc:
+        # macOS's App Management: Finder may move an app that this terminal may not change.
+        if path.suffix == ".app" and app.os_name == "darwin" and trash_with_finder(app.host, path):
+            app.say(f"  Moved {path} to the Trash (macOS let only Finder remove it).")
+            return True
+        app.say(f"  Could not delete {path} ({exc.strerror or exc}).")
+        if path.suffix == ".app":
+            app.say(
+                "    Drag it to the Trash in Finder. To let uninstall do it next time, allow your "
+                "terminal app in System Settings > Privacy & Security > App Management."
+            )
+        else:
+            app.say(f"    Delete it yourself with: rm {shlex.quote(str(path))}")
+        return False
+    app.say(f"  Deleted {path}")
+    return True
+
+
 def run_uninstall(app: App, args) -> int:
     from ornith_launcher.wizard import make_prompter
 
@@ -365,6 +467,11 @@ def run_uninstall(app: App, args) -> int:
         prompter.quit_screen(["Nothing more was removed."])
         return 1
     return 0
+
+
+def installed_tools(app: App) -> list[Installer]:
+    """The coding tools the launcher's record says it installed."""
+    return [INSTALLERS[b] for b in load_installed(app.paths).tools if b in INSTALLERS]
 
 
 def has_installs(app: App) -> bool:
@@ -434,6 +541,8 @@ def _choose_parts(
     """
     reason = server_kept_reason(app, profile, runtime)
     things = ["profile"]
+    if server_log(app, profile).exists():
+        things.append("server log")
     if profile.integrations.get("desktop_copy"):
         things.append("launch icon")
     if profile.integrations.get("shortcut"):
@@ -473,20 +582,73 @@ def _choose_parts(
     return picked in (0, 1, 3), picked in (1, 3), picked in (2, 3)
 
 
-def _keep_models(prompter: PlainPrompter) -> bool | None:
-    """For "Remove all setups": keep the models they downloaded (default), or delete them."""
+def fetched_servers(app: App, runtime: Runtime) -> list[str]:
+    """The model servers this launcher fetched that are still on this machine."""
+    recorded = getattr(load_installed(app.paths), runtime.record_kind)
+    return [r for r in recorded if runtime.image_present(r)]
+
+
+def _choose_all_parts(prompter: PlainPrompter, runtime: Runtime, servers: list[str]) -> str | None:
+    """For "Remove all setups": "setups", "models", "server" or "everything"; None for Back.
+
+    "Setups only" is the default: it keeps the models they downloaded.
+    """
+    reason = (
+        ""
+        if servers
+        else f"llama.cpp is not offered: ornith-launcher {runtime.fetched} no "
+        f"{runtime.server_noun} that is still on this machine."
+    )
     picked = prompter.choose(
         "Remove all setups:",
         ["Part", "Note"],
         [
             Choice(("Setups only", "profiles, launch icons and coding-tool entries; models stay")),
             Choice(("Setups and their models", "also deletes the models they downloaded")),
+            Choice(
+                (
+                    "Setups, models and llama.cpp",
+                    f"also deletes the {runtime.server_noun} it {runtime.fetched}",
+                ),
+                enabled=bool(servers),
+            ),
+            Choice(
+                (
+                    "Everything",
+                    "also every other model it downloaded, unfinished downloads and "
+                    "ornith-launcher's own settings",
+                )
+            ),
         ],
+        notice=reason,
         back=True,
     )
     if picked == BACK:
         return None
-    return picked == 0
+    return ("setups", "models", "server", "everything")[int(picked)]
+
+
+def _choose_tools(prompter: PlainPrompter, tools: list[Installer]) -> list[Installer] | None:
+    """Which installed coding tools to remove; None for Back."""
+    if len(tools) == 1:
+        return tools
+    choices = [Choice((t.name, f"the {t.binary} command: {t.removes}")) for t in tools]
+    choices.append(Choice(("All of them", "everything above")))
+    picked = prompter.choose("Remove which coding tool?", ["Tool", "Removes"], choices, back=True)
+    if picked == BACK:
+        return None
+    return tools if int(picked) == len(tools) else [tools[int(picked)]]
+
+
+def _delete_tool_settings(prompter: PlainPrompter, tools: list[Installer]) -> bool:
+    """Whether the tools' own settings and history go too: kept unless the user says so."""
+    return bool(
+        prompter.confirm(
+            f"Also delete {_joined([t.name for t in tools])}'s own settings and history "
+            "(sessions, logins, plugins)? They cannot be brought back.",
+            default=False,
+        )
+    )
 
 
 def _joined(words: list[str]) -> str:
@@ -500,7 +662,14 @@ def _confirm(app: App, prompter: PlainPrompter, removal: Removal, runtime: Runti
         app.say("Nothing that ornith-launcher created is left to remove.")
         return False
     groups = [
-        ("Setups", [f"{p.name}, with its server settings" for p in removal.profiles]),
+        (
+            "Setups",
+            [
+                f"{p.name}, with its server settings"
+                + (" and server log" if server_log(app, p).exists() else "")
+                for p in removal.profiles
+            ],
+        ),
         ("Coding-tool settings", removal.tool_entries),
         ("Launch icons and menu entries", [str(p) for p in removal.shortcuts]),
         (
@@ -514,9 +683,29 @@ def _confirm(app: App, prompter: PlainPrompter, removal: Removal, runtime: Runti
                 for r in removal.images
             ],
         ),
+        (
+            "Coding tools ornith-launcher installed",
+            [
+                f"{INSTALLERS[b].name} (the {b} command): {INSTALLERS[b].removes}"
+                for b in removal.tools
+            ]
+            + [
+                f"{INSTALLERS[b].name}'s own {INSTALLERS[b].settings}"
+                for b in removal.tools
+                if removal.tool_settings
+            ],
+        ),
         ("ornith-launcher's own folders", [str(p) for p in removal.folders]),
         ("Kept (you chose to keep the model)", [str(p) for p in removal.kept_by_choice]),
         ("Kept (not downloaded by ornith-launcher)", [str(p) for p in removal.kept_models]),
+        (
+            "Kept (the coding tools' own settings and history)",
+            [
+                f"{INSTALLERS[b].name}: {INSTALLERS[b].settings}"
+                for b in removal.tools
+                if not removal.tool_settings
+            ],
+        ),
     ]
     first = True
     for label, items in groups:

@@ -177,10 +177,17 @@ class Candidate:
                 )
         for n in self.needs:
             if n.need > n.budget:
-                return (
+                reason = (
                     f"needs {_gib(n.need)} GiB, {_gib(n.need - n.budget)} GiB into the 15% of "
                     f"{n.pool.name} kept free: it may slow down or fail under load"
                 )
+                free = n.pool.available_now
+                if n.pool.apps_hint and free is not None and n.need > free:
+                    reason += (
+                        f"; only {_gib(free)} GiB is free right now: close other apps to free "
+                        f"{_gib(n.need - free)} GiB before launching"
+                    )
+                return reason
         for n in self.needs:
             free = n.pool.available_now
             if free is not None and n.need > free:

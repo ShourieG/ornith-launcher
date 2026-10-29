@@ -12,9 +12,13 @@ Each worker writes through its own file handle with ``seek`` and ``write``
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import http.client
 import json
 import shutil
+import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -32,6 +36,8 @@ USER_AGENT = f"ornith-launcher/{__version__} (unofficial)"
 DEFAULT_SEGMENTS = 8
 CHUNK = 4 * 1024**2
 STALL_TIMEOUT = 60.0
+# Per address: one that does not answer this fast is skipped for the next one.
+CONNECT_TIMEOUT = 10.0
 MAX_ATTEMPTS = 30
 SAVE_EVERY = 5.0  # seconds between state saves
 RATE_WINDOW = 10.0  # seconds of history for the speed estimate
@@ -59,10 +65,60 @@ class RangeSource(Protocol):
         """A stream of bytes ``start`` to ``end`` (inclusive). Raises Expired for a stale link."""
 
 
+class _QuickConnection(http.client.HTTPSConnection):
+    """An HTTPS connection that moves on from an address that does not answer.
+
+    A host can have several addresses, and from some networks one of them never answers
+    (seen with GitHub's download servers). Python tries them one at a time, each with
+    the whole read timeout, so one dead address held a download at 0% for a minute.
+    Here each address gets CONNECT_TIMEOUT, and one that failed is tried last next time.
+    """
+
+    def __init__(self, *args, skip: set[str], **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._skip = skip
+        self._create_connection = self._connect_any
+
+    def _connect_any(
+        self, address: tuple[str, int], timeout: object, source_address: object = None
+    ) -> socket.socket:
+        host, port = address
+        read_timeout = timeout if isinstance(timeout, (int, float)) else socket.getdefaulttimeout()
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        infos.sort(key=lambda info: info[4][0] in self._skip)  # stable: failed ones last
+        error: OSError | None = None
+        for family, kind, proto, _, addr in infos:
+            sock = socket.socket(family, kind, proto)
+            try:
+                sock.settimeout(min(CONNECT_TIMEOUT, read_timeout or CONNECT_TIMEOUT))
+                if source_address:
+                    sock.bind(source_address)
+                sock.connect(addr)
+            except OSError as exc:
+                sock.close()
+                self._skip.add(addr[0])
+                error = exc
+                continue
+            sock.settimeout(read_timeout)  # a download that stalls still gets the full time
+            return sock
+        raise error or OSError(f"no address found for {host}")
+
+
+class _QuickHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.skip: set[str] = set()  # addresses that did not answer, tried last from then on
+
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        connection = functools.partial(_QuickConnection, skip=self.skip)
+        return self.do_open(connection, req, context=self._context)
+
+
 class HttpRangeSource:
     def __init__(self, timeout: float = STALL_TIMEOUT, token: str | None = None) -> None:
         self.timeout = timeout
         self.token = token
+        self._opener = urllib.request.build_opener(_QuickHTTPSHandler())
 
     def _request(self, url: str, start: int, end: int) -> urllib.request.Request:
         request = urllib.request.Request(
@@ -74,7 +130,7 @@ class HttpRangeSource:
 
     def resolve(self, url: str) -> str:
         try:
-            with urllib.request.urlopen(self._request(url, 0, 0), timeout=self.timeout) as r:
+            with self._opener.open(self._request(url, 0, 0), timeout=self.timeout) as r:
                 return r.url
         except urllib.error.HTTPError as exc:
             raise DownloadError(
@@ -88,7 +144,7 @@ class HttpRangeSource:
 
     def open(self, url: str, start: int, end: int) -> BinaryIO:
         try:
-            response = urllib.request.urlopen(self._request(url, start, end), timeout=self.timeout)
+            response = self._opener.open(self._request(url, start, end), timeout=self.timeout)
         except urllib.error.HTTPError as exc:
             if exc.code in (403, 410):
                 raise Expired() from exc
@@ -341,14 +397,18 @@ def _part_paths(dest: Path) -> tuple[Path, Path]:
 
 
 def format_status(status: Status, width: int = 30) -> str:
-    """``[#####.....] 47%  16.6/35.2 GiB  64.6 MB/s  ETA 0:04:52`` (verify: no speed)."""
+    """``[#####.....] 47%  16.6/35.2 GiB  64.6 MB/s  ETA 0:04:52`` (verify: no speed).
+
+    A file under 1 GiB counts in MB, or a small one (the macOS runtime) would read 0.0/0.0.
+    """
     fraction = status.done / status.total if status.total else 1.0
     filled = int(fraction * width)
     bar = "#" * filled + "." * (width - filled)
-    text = (
-        f"[{bar}] {fraction * 100:3.0f}%  "
-        f"{status.done / 1024**3:.1f}/{status.total / 1024**3:.1f} GiB"
-    )
+    if status.total < 1024**3:
+        sizes = f"{status.done / 1e6:.1f}/{status.total / 1e6:.1f} MB"
+    else:
+        sizes = f"{status.done / 1024**3:.1f}/{status.total / 1024**3:.1f} GiB"
+    text = f"[{bar}] {fraction * 100:3.0f}%  {sizes}"
     if status.phase == "verify":
         return text + "  verifying"
     text += f"  {status.rate / 1e6:.1f} MB/s"
@@ -357,3 +417,39 @@ def format_status(status: Status, width: int = 30) -> str:
         hours, rest = divmod(int(eta), 3600)
         text += f"  ETA {hours}:{rest // 60:02d}:{rest % 60:02d}"
     return text
+
+
+class ProgressLine:
+    """A progress line redrawn in place on a terminal, or printed every 10% elsewhere."""
+
+    def __init__(self, out=None, min_interval: float = 0.5, indent: str = "") -> None:
+        self.out = out or sys.stdout
+        self.tty = getattr(self.out, "isatty", lambda: False)()
+        self.min_interval = min_interval
+        self.indent = indent
+        self._last = 0.0
+        self._last_step = -1
+        self._shown = False
+
+    def update(self, status: Status) -> None:
+        if self.tty:
+            now = time.monotonic()
+            if now - self._last < self.min_interval and status.done < status.total:
+                return
+            self._last = now
+            self.out.write("\r" + self.indent + format_status(status) + "\x1b[K")
+            self.out.flush()
+        else:
+            step = int(status.done * 10 / status.total) if status.total else 10
+            if step == self._last_step:
+                return
+            self._last_step = step
+            print(self.indent + format_status(status), file=self.out, flush=True)
+        self._shown = True
+
+    def finish(self) -> None:
+        if self.tty and self._shown:
+            self.out.write("\n")
+            self.out.flush()
+        self._shown = False
+        self._last_step = -1

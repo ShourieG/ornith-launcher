@@ -64,10 +64,20 @@ class Pool:
     baseline: int  # memory the OS, desktop and other apps keep using
     available_now: int | None = None
     gpu_index: int | None = None
+    limit: int | None = None  # the most the GPU may use of it (Metal's working-set limit)
+    # Set only on macOS (system/macos.py); every other system keeps these defaults.
+    margin: int = 0  # room the recommended context leaves beyond the 15% reserve
+    apps_hint: bool = False  # in the reserve and short of free memory: also say to close apps
 
     @property
     def usable(self) -> int:
-        return max(0, self.total - self.baseline)
+        room = max(0, self.total - self.baseline)
+        return room if self.limit is None else min(room, self.limit)
+
+    @property
+    def limited(self) -> bool:
+        """True when the GPU's limit, not the system's own use, sets what is usable."""
+        return self.limit is not None and self.limit < self.total - self.baseline
 
 
 def parse_meminfo(text: str) -> dict[str, int]:
