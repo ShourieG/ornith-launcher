@@ -1,7 +1,1 @@
-## Development
-
-### Running tests
-
-To ensure documentation remains accurate and all relative links are functional, run the unit tests:
-
-```bash
+- **Up to 1M tokens of context.** The native 262k, or 52
