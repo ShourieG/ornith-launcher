@@ -1,0 +1,32 @@
+# GitHub Pages site, built by GitHub from the repository root: README.md becomes the home page and the
+# other Markdown files their own pages, at https://shourieg.github.io/ornith-launcher/.
+title: ShourieG/ornith-launcher
+description: >-
+  Unofficial one-command launcher for Ornith models on Linux and macOS: picks a GGUF that fits your memory, runs
+  llama.cpp with up to 1M-token context, and connects Claude Code or OpenCode.
+url: https://shourieg.github.io
+baseurl: /ornith-launcher
+lang: en
+theme: jekyll-theme-cayman
+show_downloads: false
+
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+  - jekyll-readme-index
+  - jekyll-titles-from-headings
+  - jekyll-default-layout
+
+relative_links:
+  enabled: true
+  collections: false
+
+# Only the docs belong on the site, not the code.
+exclude:
+  - src/
+  - tests/
+  - ornith-launcher
+  - pyproject.toml
+  - CLAUDE.md
