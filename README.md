@@ -1,11 +1,12 @@
 # ornith-launcher
 
 [![CI](https://github.com/ShourieG/ornith-launcher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ShourieG/ornith-launcher/actions/workflows/ci.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/ShourieG/ornith-launcher)](https://github.com/ShourieG/ornith-launcher/releases/latest)
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
 
-An unofficial tool that runs Ornith models on your own computer with one command. ornith-launcher picks a build
-that fits your memory, downloads and checks it, writes the llama.cpp settings, and can connect Claude Code or
-OpenCode to the model, showing you every choice and why it made it.
+An unofficial tool that runs Ornith models locally on Linux or macOS with one command. ornith-launcher picks a
+GGUF build that fits your memory, downloads and checks it, writes the llama.cpp settings, and can connect Claude
+Code or OpenCode to the model, showing you every choice and why it made it.
 
 - **Up to 1M tokens of context.** The native 262k, or 524k and 1M with YaRN set up for you. Ornith 1.5 35B-A3B
   found every hidden code in a 917k-token document on a DGX Spark (TESTED, a simple retrieval test);
