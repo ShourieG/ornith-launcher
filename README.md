@@ -1,6 +1,6 @@
 # ornith-launcher
 
-[![CI](https://github.com/ShourieG/ornith-launcher/actions/workflows/ci.yml/badge.svg)](https://github.com/ShourieG/ornith-launcher/actions/workflows/ci.yml)
+[![CI](https://github.com/ShourieG/ornith-launcher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ShourieG/ornith-launcher/actions/workflows/ci.yml?query=branch%3Amain)
 [![Licence: GPL-3.0-or-later](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
 
 An unofficial tool that runs Ornith models on your own computer with one command. ornith-launcher picks a build
