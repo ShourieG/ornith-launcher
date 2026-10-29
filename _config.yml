@@ -19,6 +19,13 @@ plugins:
   - jekyll-titles-from-headings
   - jekyll-default-layout
 
+# The home page header shows the page title, which would otherwise be the README's "ornith-launcher".
+defaults:
+  - scope:
+      path: README.md
+    values:
+      title: ShourieG/ornith-launcher
+
 relative_links:
   enabled: true
   collections: false
