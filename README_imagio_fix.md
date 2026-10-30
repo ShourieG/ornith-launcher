@@ -1,3 +1,3 @@
-## Contributing
+## Development
 
-This project uses `unittest` to ensure documentation quality. To check that all relative links in Markdown files are valid
+To ensure documentation quality, this project includes a link-checking test. It verifies that all relative Markdown links and internal `#section
