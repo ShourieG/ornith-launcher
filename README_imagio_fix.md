@@ -1,1 +1,3 @@
-- **Up to 1M tokens of context.** The native 262k, or 52
+## Contributing
+
+This project uses `unittest` to ensure documentation quality. To check that all relative links in Markdown files are valid
